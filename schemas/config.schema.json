@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TierSplice configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "profile"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "profile": { "enum": ["economy", "balanced", "quality"] },
+    "models": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "claude": { "$ref": "#/$defs/routes" },
+        "codex": { "$ref": "#/$defs/routes" }
+      }
+    },
+    "roles": {
+      "type": "object",
+      "additionalProperties": { "enum": ["light", "standard", "heavy"] }
+    },
+    "escalation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "maxRetries": { "const": 1 }
+      }
+    }
+  },
+  "$defs": {
+    "routes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "light": { "$ref": "#/$defs/route" },
+        "standard": { "$ref": "#/$defs/route" },
+        "heavy": { "$ref": "#/$defs/route" }
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": { "type": "string", "minLength": 1 },
+        "effort": { "enum": ["low", "medium", "high", "xhigh", "max"] }
+      }
+    }
+  }
+}
