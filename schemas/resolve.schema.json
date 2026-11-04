@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tiersplice.dev/schemas/resolve-v1.schema.json",
+  "title": "TierSplice resolve response v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "runtime",
+    "role",
+    "tier",
+    "model",
+    "effort",
+    "profile",
+    "sources",
+    "assignment",
+    "modelAvailability"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "runtime": { "enum": ["claude", "codex"] },
+    "role": { "type": ["string", "null"], "pattern": "^[a-z][a-z0-9_-]*$" },
+    "tier": { "enum": ["light", "standard", "heavy"] },
+    "model": { "type": "string", "minLength": 1 },
+    "effort": { "enum": ["low", "medium", "high", "xhigh", "max"] },
+    "profile": { "enum": ["economy", "balanced", "quality"] },
+    "sources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tier", "model", "effort", "profile"],
+      "properties": {
+        "tier": { "enum": ["argument", "built-in-role", "global:roles", "local:roles"] },
+        "model": { "enum": ["global:models", "local:models", "profile:economy", "profile:balanced", "profile:quality"] },
+        "effort": { "enum": ["global:models", "local:models", "profile:economy", "profile:balanced", "profile:quality"] },
+        "profile": { "enum": ["built-in", "global:profile", "local:profile"] }
+      }
+    },
+    "assignment": { "const": "policy-only" },
+    "modelAvailability": { "const": "unverified" }
+  }
+}

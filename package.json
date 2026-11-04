@@ -1,11 +1,11 @@
 {
   "name": "tiersplice",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Transparent model routing policy for Claude Code and Codex",
   "type": "module",
   "engines": { "node": ">=20.11" },
   "bin": { "tiersplice": "./src/cli.js" },
-  "files": ["src", "schemas", "README.md", "LICENSE", "CHANGELOG.md"],
-  "scripts": { "start": "node src/cli.js", "check": "node --check src/cli.js && node --check src/config.js && node --check src/filesystem.js && node --check src/adapters.js", "test": "node --test" },
+  "files": ["src", "schemas", "docs/resolve.md", "README.md", "LICENSE", "CHANGELOG.md", "IMPLEMENTATION_STATUS.md"],
+  "scripts": { "start": "node src/cli.js", "check": "node --check src/cli.js && node --check src/config.js && node --check src/filesystem.js && node --check src/adapters.js && node --check scripts/pack-smoke.js", "test": "node --test", "smoke:pack": "node scripts/pack-smoke.js", "prepack": "npm run check && npm test" },
   "license": "MIT"
 }

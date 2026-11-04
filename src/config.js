@@ -35,7 +35,7 @@ export function validateConfig(value, file = 'config') {
           if (!['light', 'standard', 'heavy'].includes(tier)) { errors.push(`${file}.models.${runtime}.${tier}: unknown tier`); continue; }
           if (!route || typeof route !== 'object' || Array.isArray(route)) { errors.push(`${file}.models.${runtime}.${tier}: expected an object`); continue; }
           for (const key of Object.keys(route)) if (!['model', 'effort'].includes(key)) errors.push(`${file}.models.${runtime}.${tier}.${key}: unknown property`);
-          if (route.model !== undefined && (typeof route.model !== 'string' || !route.model.trim())) errors.push(`${file}.models.${runtime}.${tier}.model: expected a non-empty string`);
+          if (route.model !== undefined && (typeof route.model !== 'string' || !route.model.trim() || /[\x00-\x1f\x7f]/.test(route.model))) errors.push(`${file}.models.${runtime}.${tier}.model: expected a non-empty string without control characters`);
           if (route.effort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(route.effort)) errors.push(`${file}.models.${runtime}.${tier}.effort: expected low, medium, high, xhigh, or max`);
         }
       }

@@ -17,10 +17,17 @@ async function fixture(t, runtimes = false) {
   await mkdir(home, { recursive: true });
   await mkdir(bin, { recursive: true });
   if (runtimes) {
-    for (const [name, version] of [['claude', 'Claude Code 2.0.0'], ['codex', 'codex 0.50.0']]) {
-      const executable = path.join(bin, name);
-      await writeFile(executable, `#!/bin/sh\nprintf '%s\\n' '${version}'\n`);
-      await chmod(executable, 0o755);
+    if (process.platform === 'win32') {
+      await mkdir(path.join(home, '.claude'), { recursive: true });
+      await mkdir(path.join(home, '.codex'), { recursive: true });
+      await writeFile(path.join(home, '.claude', 'settings.json'), '{}');
+      await writeFile(path.join(home, '.codex', 'config.toml'), '');
+    } else {
+      for (const [name, version] of [['claude', 'Claude Code 2.0.0'], ['codex', 'codex 0.50.0']]) {
+        const executable = path.join(bin, name);
+        await writeFile(executable, `#!/bin/sh\nprintf '%s\\n' '${version}'\n`);
+        await chmod(executable, 0o755);
+      }
     }
   }
   const env = {
@@ -28,7 +35,7 @@ async function fixture(t, runtimes = false) {
     HOME: home,
     USERPROFILE: home,
     XDG_CONFIG_HOME: path.join(root, 'xdg'),
-    PATH: runtimes ? bin : '',
+    PATH: runtimes && process.platform !== 'win32' ? bin : '',
     EDITOR: '',
     VISUAL: ''
   };
@@ -51,7 +58,7 @@ test('CLI runs when invoked through an npm-style symlink', async (t) => {
   await symlink(cli, link);
   const result = spawnSync(process.execPath, [link, '--version'], { env: fx.env, encoding: 'utf8' });
   assert.equal(result.status, 0);
-  assert.equal(result.stdout.trim(), '0.1.0');
+  assert.equal(result.stdout.trim(), '0.2.0');
 });
 
 test('local init, status JSON, profile change, and doctor report truthful runtime state', async (t) => {
@@ -78,6 +85,7 @@ test('local init, status JSON, profile change, and doctor report truthful runtim
   assert.equal(doctor.status, 1);
   assert.equal(JSON.parse(doctor.stdout).status, 'warning');
   assert.ok(JSON.parse(doctor.stdout).diagnostics.some((item) => item.code === 'MODEL_ACCESS_UNVERIFIED'));
+  assert.ok(JSON.parse(doctor.stdout).diagnostics.every((item) => typeof item.remediation === 'string' && item.remediation.length > 0));
 });
 
 test('dry-run is read-only and uninstall preserves modified managed files', async (t) => {
@@ -85,6 +93,9 @@ test('dry-run is read-only and uninstall preserves modified managed files', asyn
   const dryRun = fx.run('init', '--local', '--profile', 'economy', '--yes', '--dry-run');
   assert.equal(dryRun.status, 0, dryRun.stderr);
   await assert.rejects(access(path.join(fx.project, '.tiersplice.json')));
+  await assert.rejects(access(path.join(fx.project, '.tiersplice-manifest.json')));
+  await assert.rejects(access(path.join(fx.project, '.claude')));
+  await assert.rejects(access(path.join(fx.project, '.codex')));
 
   const init = fx.run('init', '--local', '--profile', 'balanced', '--yes');
   assert.equal(init.status, 0, init.stderr);
@@ -103,8 +114,21 @@ test('dry-run is read-only and uninstall preserves modified managed files', asyn
   await access(path.join(fx.project, '.tiersplice.json'));
 
   const uninstall = fx.run('uninstall', '--local');
-  assert.equal(uninstall.status, 1);
+  assert.equal(uninstall.status, 1, uninstall.stderr || uninstall.stdout);
   assert.equal(await readFile(editedAgent, 'utf8'), 'user edit\n');
+  await assert.rejects(access(path.join(fx.project, '.tiersplice.json')));
+});
+
+test('init preflights unmanaged agent conflicts before writing configuration', async (t) => {
+  const fx = await fixture(t, true);
+  const agents = path.join(fx.project, '.claude', 'agents');
+  await mkdir(agents, { recursive: true });
+  const collision = path.join(agents, 'tiersplice-debugger.md');
+  await writeFile(collision, 'User-owned debugger definition\n');
+  const result = fx.run('init', '--local', '--profile', 'balanced', '--yes');
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /Conflict:/);
+  assert.equal(await readFile(collision, 'utf8'), 'User-owned debugger definition\n');
   await assert.rejects(access(path.join(fx.project, '.tiersplice.json')));
 });
 
@@ -118,22 +142,71 @@ test('unsupported or malformed configuration is reported rather than repaired si
   assert.ok(report.diagnostics.some((item) => item.code === 'CONFIG_INVALID'));
 });
 
-test('GSD detection is project-scoped and leaves existing GSD configuration unchanged', async (t) => {
+test('corrupt inherited global config blocks local policy mutations and is reported with its path', async (t) => {
+  const fx = await fixture(t);
+  const globalConfig = path.join(fx.root, 'xdg', 'tiersplice', 'config.json');
+  await mkdir(path.dirname(globalConfig), { recursive: true });
+  await writeFile(globalConfig, '{bad json');
+  const localPath = path.join(fx.project, '.tiersplice.json');
+  await writeFile(localPath, JSON.stringify({ schemaVersion: 1, profile: 'balanced' }));
+  const profile = fx.run('profile', 'economy', '--local');
+  assert.equal(profile.status, 2);
+  assert.match(profile.stderr, new RegExp(globalConfig.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  const sync = fx.run('sync', '--local');
+  assert.equal(sync.status, 2);
+  const doctor = fx.run('doctor', '--local', '--json');
+  assert.equal(doctor.status, 2);
+  assert.ok(JSON.parse(doctor.stdout).diagnostics.some((item) => item.code === 'CONFIG_INVALID' && item.message.includes(globalConfig)));
+  assert.equal(JSON.parse(await readFile(localPath, 'utf8')).profile, 'balanced');
+});
+
+test('framework files remain untouched and are not probed', async (t) => {
   const fx = await fixture(t, true);
-  const gsdConfig = path.join(fx.project, '.planning', 'config.json');
-  const gsdContents = '{\n  "model_profile": "user-managed",\n  "custom": true\n}\n';
-  await mkdir(path.dirname(gsdConfig), { recursive: true });
-  await writeFile(gsdConfig, gsdContents);
+  const frameworkConfig = path.join(fx.project, '.custom-workflow', 'settings.json');
+  const frameworkContents = '{\n  "model_profile": "user-managed",\n  "custom": true\n}\n';
+  await mkdir(path.dirname(frameworkConfig), { recursive: true });
+  await writeFile(frameworkConfig, frameworkContents);
 
   const init = fx.run('init', '--local', '--profile', 'balanced', '--yes');
-  assert.equal(init.status, 1);
-  assert.match(init.stdout, /GSD project detected/);
+  assert.equal(init.status, 0);
   const sync = fx.run('sync', '--local');
   assert.equal(sync.status, 0);
-  assert.equal(await readFile(gsdConfig, 'utf8'), gsdContents);
+  assert.equal(await readFile(frameworkConfig, 'utf8'), frameworkContents);
   const status = JSON.parse(fx.run('status', '--local', '--json').stdout);
-  assert.equal(status.gsd.status, 'unverified');
-  assert.match(status.gsd.shadowing, /Existing GSD model settings/);
+  assert.equal(Object.hasOwn(status, 'framework'), false);
+});
+
+test('resolve returns a read-only policy decision without a native runtime', async (t) => {
+  const fx = await fixture(t);
+  const result = fx.run('resolve', '--runtime', 'claude', '--role', 'debugging', '--json');
+  assert.equal(result.status, 0, result.stderr);
+  const resolved = JSON.parse(result.stdout);
+  assert.equal(resolved.tier, 'standard');
+  assert.equal(resolved.assignment, 'policy-only');
+  assert.equal(resolved.modelAvailability, 'unverified');
+  const schema = JSON.parse(await readFile(new URL('../schemas/resolve.schema.json', import.meta.url), 'utf8'));
+  assert.deepEqual(Object.keys(resolved).sort(), [...schema.required].sort());
+  assert.deepEqual(Object.keys(resolved.sources).sort(), [...schema.properties.sources.required].sort());
+  await assert.rejects(access(path.join(fx.project, '.tiersplice.json')));
+});
+
+test('manual config edits survive profile changes and sync', async (t) => {
+  const fx = await fixture(t, true);
+  assert.equal(fx.run('init', '--local', '--profile', 'balanced', '--yes').status, 0);
+  const configPath = path.join(fx.project, '.tiersplice.json');
+  const edited = { schemaVersion: 1, profile: 'balanced', roles: { debugging: 'heavy' }, models: { codex: { heavy: { model: 'custom-model', effort: 'xhigh' } } } };
+  await writeFile(configPath, `${JSON.stringify(edited, null, 2)}\n`);
+  assert.equal(fx.run('doctor', '--local').status, 1);
+  assert.equal(fx.run('profile', 'economy', '--local').status, 0);
+  assert.equal(fx.run('sync', '--local').status, 0);
+  const after = JSON.parse(await readFile(configPath, 'utf8'));
+  assert.equal(after.profile, 'economy');
+  assert.deepEqual(after.roles, edited.roles);
+  assert.deepEqual(after.models, edited.models);
+  const uninstall = fx.run('uninstall', '--local');
+  assert.equal(uninstall.status, 1);
+  assert.match(uninstall.stdout, /Preserved modified file/);
+  assert.equal(JSON.parse(await readFile(configPath, 'utf8')).profile, 'economy');
 });
 
 test('local profile changes do not modify global TierSplice configuration', async (t) => {

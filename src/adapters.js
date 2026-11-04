@@ -1,4 +1,4 @@
-import { access, readFile } from 'node:fs/promises';
+import { access } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
@@ -25,7 +25,7 @@ export async function detectRuntimes(paths) {
 }
 
 export function renderClaude(policy) {
-  const names = { documentation: 'docs', exploration: 'explorer', implementation: 'implementer', architecture: 'architect', review: 'reviewer' };
+  const names = { documentation: 'docs', exploration: 'explorer', implementation: 'implementer', debugging: 'debugger', architecture: 'architect', review: 'reviewer' };
   return Object.entries(names).map(([role, suffix]) => {
     const tier = policy.roles[role];
     const route = policy.routes.claude[tier];
@@ -33,41 +33,62 @@ export function renderClaude(policy) {
       docs: 'Handle documentation, explanations, and concise repository research.',
       explorer: 'Inspect code and report findings without modifying files.',
       implementer: 'Implement scoped changes and report files changed.',
+      debugger: 'Investigate a scoped bug, identify its cause, apply a focused fix, and report evidence.',
       architect: 'Analyze system design and propose concrete implementation tradeoffs.',
       reviewer: 'Review changes for correctness, regressions, and security issues without editing.'
     };
     const tools = suffix === 'explorer' || suffix === 'reviewer' ? 'tools: Read, Grep, Glob\n' : '';
-    return `---\nname: tiersplice-${suffix}\ndescription: ${descriptions[suffix]}\nmodel: ${route.model}\n${tools}---\n${descriptions[suffix]} This agent is assigned the ${tier} tier by TierSplice profile ${policy.profile}. Treat model selection as a configured preference; the host may override it.\n`;
-  }).join('\n');
+    const safe = (value) => {
+      if (/[\r\n\x00-\x1f\x7f]/.test(value)) throw new Error('Model and instruction values cannot contain control characters.');
+      return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+    };
+    const content = `---\nname: tiersplice-${suffix}\ndescription: "${safe(descriptions[suffix])}"\nmodel: "${safe(route.model)}"\n${tools}---\n${descriptions[suffix]} Assigned the ${tier} tier by TierSplice profile ${policy.profile}; the host may override this preference.\n`;
+    parseClaudeAgent(content);
+    return { name: suffix, content };
+  });
 }
 
 function tomlString(value) { return JSON.stringify(value); }
 
 export function renderCodex(policy) {
-  const names = { documentation: 'docs', exploration: 'explorer', implementation: 'implementer', architecture: 'architect', review: 'reviewer' };
+  const names = { documentation: 'docs', exploration: 'explorer', implementation: 'implementer', debugging: 'debugger', architecture: 'architect', review: 'reviewer' };
   return Object.entries(names).map(([role, suffix]) => {
     const tier = policy.roles[role];
     const route = policy.routes.codex[tier];
-    const instructions = `Work on the ${role} role at the ${tier} task tier. The TierSplice ${policy.profile} profile requests this model and reasoning effort; host settings and account availability may override or reject them.`;
+    const instructions = `${({ documentation: 'Update documentation and explain relevant changes.', exploration: 'Inspect the repository and report findings without editing.', implementation: 'Apply scoped code changes and report files changed.', debugging: 'Investigate and fix a scoped bug, then report evidence.', architecture: 'Analyze system design and concrete tradeoffs.', review: 'Inspect correctness and regressions without editing.' })[role]} TierSplice ${policy.profile} requests ${tier}; host settings and account availability may override it.`;
     const effort = route.effort === 'max' ? '' : `model_reasoning_effort = ${tomlString(route.effort)}\n`;
-    return { name: suffix, body: `name = ${tomlString(`tiersplice-${suffix}`)}\ndescription = ${tomlString(`TierSplice ${role} agent (${tier} tier).`)}\nmodel = ${tomlString(route.model)}\n${effort}developer_instructions = ${tomlString(instructions)}\n` };
+    const body = `name = ${tomlString(`tiersplice-${suffix}`)}\ndescription = ${tomlString(`TierSplice ${role} agent (${tier} tier).`)}\nmodel = ${tomlString(route.model)}\n${effort}developer_instructions = ${tomlString(instructions)}\n`;
+    parseCodexAgent(body);
+    return { name: suffix, body };
   });
 }
 
-export async function detectGsd(projectRoot) {
-  const configFile = path.join(projectRoot, '.planning', 'config.json');
-  try {
-    const config = JSON.parse(await readFile(configFile, 'utf8'));
-    return { detected: true, configFile, config, supported: false, message: 'GSD project detected; compatibility schema/version is not verified, so TierSplice made no GSD changes.' };
-  } catch (error) {
-    if (error.code === 'ENOENT') return { detected: false, configFile, supported: false, message: 'GSD not detected in this project.' };
-    return { detected: true, configFile, config: null, supported: false, message: `GSD config could not be read safely (${error.message}); no GSD changes were made.` };
+export function parseClaudeAgent(content) {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/.exec(content);
+  if (!match) throw new Error('Invalid Claude agent: missing YAML frontmatter delimiters.');
+  const frontmatter = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const field = /^([a-zA-Z][a-zA-Z0-9]*):(?:\s+(.+))?$/.exec(line);
+    if (!field || Object.hasOwn(frontmatter, field[1])) throw new Error(`Invalid Claude agent frontmatter line: ${line}`);
+    const value = field[2] ?? '';
+    try { frontmatter[field[1]] = value.startsWith('"') ? JSON.parse(value) : value; }
+    catch { throw new Error(`Invalid quoted YAML scalar for ${field[1]}.`); }
+    if (typeof frontmatter[field[1]] !== 'string') throw new Error(`Invalid Claude agent value for ${field[1]}.`);
   }
+  if (!frontmatter.name || !frontmatter.description || !frontmatter.model || !match[2].trim()) throw new Error('Claude agent is missing a required name, description, model, or prompt.');
+  if (Object.keys(frontmatter).some((key) => !['name', 'description', 'model', 'tools'].includes(key))) throw new Error('Claude agent contains an unsupported frontmatter field.');
+  return { frontmatter, prompt: match[2] };
 }
 
-export function gsdShadowing(gsd, scope, localConfig) {
-  if (!gsd.detected) return null;
-  if (scope === 'global' && gsd.configFile && !localConfig) return 'This project has .planning/config.json; run tiersplice sync --local to apply project-specific policy when support is available.';
-  if (gsd.config && Object.keys(gsd.config).some((key) => ['model_overrides', 'models', 'model_profile'].includes(key))) return 'Existing GSD model settings may take precedence over TierSplice routing.';
-  return gsd.message;
+export function parseCodexAgent(content) {
+  const values = {};
+  for (const line of content.trimEnd().split(/\r?\n/)) {
+    const match = /^([a-z][a-z_]+) = ("(?:[^"\\]|\\.)*")$/.exec(line);
+    if (!match || Object.hasOwn(values, match[1])) throw new Error(`Invalid Codex agent TOML line: ${line}`);
+    try { values[match[1]] = JSON.parse(match[2]); }
+    catch { throw new Error(`Invalid TOML basic string for ${match[1]}.`); }
+  }
+  if (!values.name || !values.description || !values.model || !values.developer_instructions) throw new Error('Codex agent is missing a required field.');
+  if (Object.keys(values).some((key) => !['name', 'description', 'model', 'model_reasoning_effort', 'developer_instructions'].includes(key))) throw new Error('Codex agent contains an unsupported TOML field.');
+  return values;
 }
