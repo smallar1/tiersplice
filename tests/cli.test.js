@@ -58,7 +58,7 @@ test('CLI runs when invoked through an npm-style symlink', async (t) => {
   await symlink(cli, link);
   const result = spawnSync(process.execPath, [link, '--version'], { env: fx.env, encoding: 'utf8' });
   assert.equal(result.status, 0);
-  assert.equal(result.stdout.trim(), '0.2.0');
+  assert.equal(result.stdout.trim(), JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version);
 });
 
 test('local init, status JSON, profile change, and doctor report truthful runtime state', async (t) => {

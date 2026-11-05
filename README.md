@@ -6,7 +6,7 @@ TierSplice is an open-source, installable CLI that helps existing coding tools s
 
 Instead of replacing your agents, TierSplice gives them a shared, configurable model-tier policy.
 
-> **Project status: v0.2.0 in development; not published to npm.** Runtime model availability and actual agent invocation are not verified. See [IMPLEMENTATION_STATUS.md](./IMPLEMENTATION_STATUS.md) for the current evidence and limitations.
+> **Project status: `0.2.1-beta.0` beta candidate.** This prerelease is opt-in and is not promoted to npm `latest`. Runtime model availability and actual agent invocation are not verified. See [IMPLEMENTATION_STATUS.md](./IMPLEMENTATION_STATUS.md) for evidence and [docs/PUBLISHING.md](./docs/PUBLISHING.md) for the manual release procedure.
 
 ## What TierSplice does
 
@@ -20,22 +20,22 @@ Instead of replacing your agents, TierSplice gives them a shared, configurable m
 
 TierSplice is meant to work with your **existing CLI authentication**. The core package is not designed to require paid API keys, a hosted service, or third-party LLMs.
 
-## Installation (after npm publication)
+## Installation
 
-The commands below are proposed until the package is published to npm. Interactive setup asks for scope and profile when those were not supplied as flags. Supported native coding environments are detected automatically.
+Install the beta explicitly with `npx tiersplice@beta`. Interactive setup asks for scope and profile when those were not supplied as flags. Supported native coding environments are detected automatically.
 
 ```bash
 # Interactive
-npx tiersplice@latest init
+npx tiersplice@beta init
 
 # Configure for all repositories
-npx tiersplice@latest init --global
+npx tiersplice@beta init --global
 
 # Configure only the current repository
-npx tiersplice@latest init --local
+npx tiersplice@beta init --local
 
 # Non-interactive example
-npx tiersplice@latest init --global --profile balanced --yes
+npx tiersplice@beta init --global --profile balanced --yes
 ```
 
 Global setup configures native user-level agents. Local setup writes only to the current project and its supported local configuration. Global setup does not rewrite every existing repository.
@@ -58,24 +58,24 @@ Model and effort settings can be overridden in the JSON configuration. Claude ag
 
 ```bash
 # Change the active profile for all projects
-npx tiersplice@latest profile economy --global
+npx tiersplice@beta profile economy --global
 
 # Override the profile in the current project
-npx tiersplice@latest profile quality --local
+npx tiersplice@beta profile quality --local
 
 # Inspect model assignments and compatibility
-npx tiersplice@latest status
-npx tiersplice@latest doctor
-npx tiersplice@latest resolve --runtime codex --role implementation --json
+npx tiersplice@beta status
+npx tiersplice@beta doctor
+npx tiersplice@beta resolve --runtime codex --role implementation --json
 
 # Open the configuration file
-npx tiersplice@latest config edit
+npx tiersplice@beta config edit
 
 # Reapply owned settings after changing configuration
-npx tiersplice@latest sync --local
+npx tiersplice@beta sync --local
 
 # See exactly what would be removed
-npx tiersplice@latest uninstall --local --dry-run
+npx tiersplice@beta uninstall --local --dry-run
 ```
 
 Configuration locations:
@@ -108,8 +108,8 @@ TierSplice does **not** bypass Claude Code or Codex subscription limits, guarant
 
 | Target | Features | Status |
 | --- | --- | --- |
-| **v0.1** | CLI, global/local setup, profiles, Claude/Codex agents, configuration, status/doctor, sync/uninstall | Implemented; unpublished |
-| **v0.2** | Stabilization, debugger agent, policy resolution API, framework-neutral operation | In development |
+| **v0.1** | CLI, global/local setup, profiles, Claude/Codex agents, configuration, status/doctor, sync/uninstall | Implemented |
+| **v0.2** | Debugger agent, policy resolution API, framework-neutral operation | Implemented; native host invocation unverified |
 | **v0.3** | Explicit, user-triggered Claude Code ↔ Codex task handoffs | Future |
 | **v0.4+** | Optional, bounded cross-platform failover on supported usage-limit errors | Exploratory |
 
@@ -119,7 +119,7 @@ Feature availability will be updated as code actually ships; this roadmap is not
 
 ## Contributing
 
-TierSplice is intended as a small, maintainable open-source project. Contributions should favor native runtime features, minimal dependencies, safe configuration edits, and compatibility checks for every supported adapter. See [CONTRIBUTING.md](./CONTRIBUTING.md) and [SECURITY.md](./SECURITY.md).
+TierSplice is intended as a small, maintainable open-source project. Contributions should favor native runtime features, minimal dependencies, safe configuration edits, and compatibility checks for every supported adapter. See [CONTRIBUTING.md](./CONTRIBUTING.md), [SECURITY.md](./SECURITY.md), and [docs/PUBLISHING.md](./docs/PUBLISHING.md).
 
 ## License
 

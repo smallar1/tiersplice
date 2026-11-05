@@ -1,0 +1,12 @@
+node_modules/
+coverage/
+*.tgz
+*.tar.gz
+*.log
+*.tmp
+.env
+.env.*
+!.env.example
+.npmrc
+.tiersplice-manifest.json
+.DS_Store
