@@ -283,6 +283,25 @@ test('upgrade dry run is read only, then upgrades managed setup metadata idempot
   assert.deepEqual(JSON.parse(second.stdout).plannedChanges, []);
 });
 
+test('upgrade dry run detects runtimes from config files without executable probes', async (t) => {
+  const fx = await fixture(t);
+  const init = fx.run('init', '--local', '--yes');
+  assert.equal(init.status, 1); // No runtimes exist until the fixture markers are created.
+  await mkdir(path.join(fx.home, '.claude'), { recursive: true });
+  await mkdir(path.join(fx.home, '.codex'), { recursive: true });
+  await writeFile(path.join(fx.home, '.claude', 'settings.json'), '{}\n');
+  await writeFile(path.join(fx.home, '.codex', 'config.toml'), '\n');
+
+  const manifestPath = path.join(fx.project, '.tiersplice-manifest.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  manifest.setupVersion = '0.3.0-beta.0';
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  const upgrade = fx.run('upgrade', '--local', '--dry-run', '--json');
+  assert.equal(upgrade.status, 0, upgrade.stderr || upgrade.stdout);
+  assert.deepEqual(JSON.parse(upgrade.stdout).requiredManualActions, []);
+});
+
 test('upgrade missing installation gives a safe init instruction', async (t) => {
   const fx = await fixture(t);
   const result = fx.run('upgrade', '--global', '--json');
