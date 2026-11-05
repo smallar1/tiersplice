@@ -63,9 +63,15 @@ test('all six role agents render as structured, parseable Claude and Codex defin
   for (const agent of claude) {
     const parsed = parseClaudeAgent(agent.content);
     assert.equal(parsed.frontmatter.name, `tiersplice-${agent.name}`);
+    assert.match(parsed.prompt, /task-specific assignment/);
+    assert.match(parsed.prompt, /do not recursively delegate/);
+    assert.match(parsed.prompt, /actual model execution is unverified/);
   }
   for (const agent of codex) {
     const parsed = parseCodexAgent(agent.body);
     assert.equal(parsed.name, `tiersplice-${agent.name}`);
+    assert.match(parsed.developer_instructions, /task-specific assignment/);
+    assert.match(parsed.developer_instructions, /do not recursively delegate/);
+    assert.match(parsed.developer_instructions, /actual model execution is unverified/);
   }
 });

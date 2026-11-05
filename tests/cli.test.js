@@ -78,7 +78,7 @@ test('local init, status JSON, profile change, and doctor report truthful runtim
   assert.match(await readFile(path.join(fx.project, '.claude', 'agents', 'tiersplice-explorer.md'), 'utf8'), /tools: Read, Grep, Glob/);
   const claudePolicy = await readFile(path.join(fx.project, 'CLAUDE.md'), 'utf8');
   assert.match(claudePolicy, /tiersplice:auto-delegation:start v1/);
-  assert.match(claudePolicy, /proactively delegate/);
+  assert.match(claudePolicy, /select one primary specialist/);
   const codexPolicy = await readFile(path.join(fx.project, 'AGENTS.md'), 'utf8');
   assert.match(codexPolicy, /tiersplice:auto-delegation:start v1/);
 
@@ -90,6 +90,9 @@ test('local init, status JSON, profile change, and doctor report truthful runtim
   assert.equal(statusJson.runtimes.codex.status, 'detected');
   assert.equal(statusJson.autoDelegation.observed, 'unverified');
   assert.equal(statusJson.autoDelegation.installed, true);
+  assert.equal(statusJson.autoDelegation.dispatch, 'native-host-controlled');
+  assert.equal(statusJson.autoDelegation.invocation, 'unverified');
+  assert.equal(statusJson.autoDelegation.modelExecution, 'unverified');
 
   const profile = fx.run('profile', 'quality', '--local');
   assert.equal(profile.status, 0, profile.stderr);
@@ -276,7 +279,7 @@ test('upgrade dry run is read only, then upgrades managed setup metadata idempot
   for (const [file, contents] of before) assert.deepEqual(await readFile(file), contents);
   assert.equal(fx.run('upgrade', '--local', '--json').status, 0);
   const upgraded = JSON.parse(await readFile(manifestPath, 'utf8'));
-  assert.equal(upgraded.setupVersion, '0.4.0-beta.0');
+  assert.equal(upgraded.setupVersion, '0.5.0-beta.0');
   assert.equal(JSON.parse(await readFile(configPath, 'utf8')).profile, 'quality');
   const second = fx.run('upgrade', '--local', '--json');
   assert.equal(second.status, 0);

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0-beta.0 — Native task routing and contextual handoff (implementation in progress)
+
+- Add pure task-route resolution against configured role tiers and effective host model/effort policy; resolving a route does not mutate configuration or imply execution.
+- Add a bounded prompt composer that preserves explicit objective, scope, constraints, relevant context, expected result, and verification fields without storing them.
+- Strengthen generated Claude Code and Codex specialists with task-specific assignment, ambiguity handling, untrusted-context, no-recursion, and parent-integration requirements.
+- Expand managed routing guidance to cover eligible work, one specialist per routed unit, tier selection, opt-outs, host dispatch boundaries, and truthful launch/model reporting.
+- Extend `status` JSON and text with separate host-controlled dispatch, invocation, and model-execution states.
+- Update routing documentation and beta status. Real-host invocation and observed model execution remain unverified; no background dispatcher or inference service is added.
+
 ## 0.4.0-beta.0 — Installation upgrades and model tracking (implementation in progress)
 
 - Add `upgrade --global|--local` with a read-only dry run, managed-file preflight, rollback, setup-version metadata, and explicit missing-install and future-version diagnostics.

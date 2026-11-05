@@ -1,12 +1,12 @@
 # TierSplice
 
-**Model routing for coding agents, without another agent harness.**
+**Model routing and focused native subagent handoffs, without another agent harness.**
 
-TierSplice is an open-source, installable CLI that helps existing coding tools send light, standard, and complex tasks to appropriate models. It configures the native delegation features of **Claude Code** and **Codex**, while aiming to keep usage efficient and your current development workflow intact.
+TierSplice is an open-source, installable CLI that helps Claude Code and Codex route bounded work to configured specialists and models. The host keeps control of subagent creation, tools, permissions, context, and results.
 
 Instead of replacing your agents, TierSplice gives them a shared, configurable model-tier policy.
 
-> **Project status: `0.4.0-beta.0` implementation in progress.** Setup upgrades and opt-in model refresh are being added. Live runtime discovery and invocation remain unverified. See [IMPLEMENTATION_STATUS.md](./IMPLEMENTATION_STATUS.md) for current evidence.
+> **Project status: `0.5.0-beta.0` implementation in progress.** Native host instructions now define specialist selection, task-specific handoff, and honest result reporting. Hosts control dispatch; actual invocation and model execution are not asserted by setup or diagnostics. See [IMPLEMENTATION_STATUS.md](./IMPLEMENTATION_STATUS.md) for current evidence.
 
 ## What TierSplice does
 
@@ -112,11 +112,11 @@ Local configuration overrides applicable global defaults. TierSplice will preser
 
 `resolve` returns one offline JSON policy decision for a runtime and role or tier. Its stable v1 schema and provenance fields are documented in [docs/resolve.md](./docs/resolve.md) and [schemas/resolve.schema.json](./schemas/resolve.schema.json). It reports configured preference only; it does not test model access or execution.
 
-Automatic delegation is advisory. Use normal prompts after setup; no TierSplice command or agent name is needed. Check `status` and `doctor` to distinguish configured and installed guidance from observed invocation. See [automatic delegation](./docs/automatic-delegation.md) for placement, opt-out behavior, conflicts, and a manual verification checklist.
+Automatic delegation uses host-native behavior. After setup, the parent classifies eligible work, resolves a specialist and configured tier, and sends a focused task prompt through its native subagent interface when available. Check `status` and `doctor` for configured policy and installed guidance; these commands cannot observe a live child run. See [automatic delegation](./docs/automatic-delegation.md) for host mechanisms, prompt boundaries, opt-out behavior, and evidence limits.
 
 ## Compatibility and limitations
 
-TierSplice is **not** a standalone coding agent. It relies on the native subagent and model-selection capabilities of your installed tools. Routing instructions are guidance, not a deterministic dispatcher; a host may handle eligible work directly. Actual automatic invocation remains unverified.
+TierSplice is **not** a standalone coding agent or dispatcher process. Claude Code's parent session can automatically select custom subagents; Codex can use subagents when its native session and configuration enable them. TierSplice cannot force either host to create a child, and status/doctor do not observe live session events. Treat generated model and effort values as requests until the host exposes execution evidence.
 
 Third-party workflow tools retain their own planning and delegation. `resolve` reports TierSplice's configured policy only; it does not launch a model or guarantee that another tool uses the result.
 
@@ -130,6 +130,7 @@ TierSplice does **not** change the parent model, bypass Claude Code or Codex sub
 | **v0.2** | Debugger agent, policy resolution API, framework-neutral operation | Implemented; native host invocation unverified |
 | **v0.3** | Automatic native delegation guidance, agent descriptions, and safe managed instruction blocks | Implemented; live host verification outstanding |
 | **v0.4** | Setup upgrades, native model catalog refresh, tracking policy, and compatibility diagnostics | Beta implementation; see [IMPLEMENTATION_STATUS.md](./IMPLEMENTATION_STATUS.md) |
+| **v0.5** | Native task routing guidance, structured route resolution, task-specific handoff contract, and truthful invocation states | Beta implementation; host dispatch and model execution remain host-controlled and unverified by CLI |
 | **Later** | Explicit Claude Code ↔ Codex task handoffs and quota-aware failover | Deferred / exploratory |
 
 Optional external framework adapters may be considered later if users request them; they are not part of v0.2.
