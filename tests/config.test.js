@@ -33,6 +33,11 @@ test('config validation reports exact paths for invalid values', () => {
   assert.ok(errors.includes('fixture.json.models.codex.heavy.effort: expected low, medium, high, xhigh, or max'));
 });
 
+test('config accepts additive automatic-delegation opt-out and rejects invalid values', () => {
+  assert.deepEqual(validateConfig({ schemaVersion: 1, profile: 'balanced', delegation: { automatic: false } }), []);
+  assert.ok(validateConfig({ schemaVersion: 1, profile: 'balanced', delegation: { automatic: 'yes' } }).some((item) => item.includes('delegation.automatic: expected a boolean')));
+});
+
 test('config validation rejects control characters in custom model identifiers', () => {
   const errors = validateConfig({ schemaVersion: 1, profile: 'balanced', models: { claude: { standard: { model: 'sonnet\nmodel: injected' } } } }, 'custom.json');
   assert.ok(errors.some((error) => error.includes('custom.json.models.claude.standard.model')));

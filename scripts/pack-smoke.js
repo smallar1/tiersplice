@@ -22,7 +22,7 @@ try {
   if (jsonStart < 0) throw new Error(`npm pack did not return its JSON manifest: ${packOutput}`);
   const packReport = JSON.parse(packOutput.slice(jsonStart + 1));
   const shipped = new Set(packReport[0].files.map(({ path: file }) => file));
-  const expected = ['CHANGELOG.md', 'IMPLEMENTATION_STATUS.md', 'LICENSE', 'README.md', 'RELEASE_AUDIT_v0.2.1.md', 'docs/resolve.md', 'package.json', 'schemas/config.schema.json', 'schemas/resolve.schema.json', 'src/adapters.js', 'src/cli.js', 'src/config.js', 'src/filesystem.js'];
+  const expected = ['CHANGELOG.md', 'IMPLEMENTATION_STATUS.md', 'LICENSE', 'README.md', 'RELEASE_AUDIT_v0.2.1.md', 'docs/automatic-delegation.md', 'docs/resolve.md', 'package.json', 'schemas/config.schema.json', 'schemas/resolve.schema.json', 'src/adapters.js', 'src/cli.js', 'src/config.js', 'src/filesystem.js'];
   if (shipped.size !== expected.length || expected.some((file) => !shipped.has(file))) throw new Error(`Unexpected package contents: ${[...shipped].sort().join(', ')}`);
   const tarballName = (await readdir(tarballs)).find((name) => name.endsWith('.tgz'));
   if (!tarballName) throw new Error('npm pack did not create a tarball.');
