@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile, chmod, access, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rename, rm, writeFile, chmod, access, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -76,6 +76,11 @@ test('local init, status JSON, profile change, and doctor report truthful runtim
   const agents = path.join(fx.project, '.codex', 'agents');
   assert.match(await readFile(path.join(agents, 'tiersplice-implementer.toml'), 'utf8'), /model_reasoning_effort = "high"/);
   assert.match(await readFile(path.join(fx.project, '.claude', 'agents', 'tiersplice-explorer.md'), 'utf8'), /tools: Read, Grep, Glob/);
+  const claudePolicy = await readFile(path.join(fx.project, 'CLAUDE.md'), 'utf8');
+  assert.match(claudePolicy, /tiersplice:auto-delegation:start v1/);
+  assert.match(claudePolicy, /proactively delegate/);
+  const codexPolicy = await readFile(path.join(fx.project, 'AGENTS.md'), 'utf8');
+  assert.match(codexPolicy, /tiersplice:auto-delegation:start v1/);
 
   const status = fx.run('status', '--local', '--json');
   assert.equal(status.status, 0, status.stderr);
@@ -83,6 +88,8 @@ test('local init, status JSON, profile change, and doctor report truthful runtim
   assert.equal(statusJson.schemaVersion, 1);
   assert.equal(statusJson.config.effectiveProfile, 'balanced');
   assert.equal(statusJson.runtimes.codex.status, 'detected');
+  assert.equal(statusJson.autoDelegation.observed, 'unverified');
+  assert.equal(statusJson.autoDelegation.installed, true);
 
   const profile = fx.run('profile', 'quality', '--local');
   assert.equal(profile.status, 0, profile.stderr);
@@ -164,6 +171,42 @@ test('corrupt inherited global config blocks local policy mutations and is repor
   assert.equal(doctor.status, 2);
   assert.ok(JSON.parse(doctor.stdout).diagnostics.some((item) => item.code === 'CONFIG_INVALID' && item.message.includes(globalConfig)));
   assert.equal(JSON.parse(await readFile(localPath, 'utf8')).profile, 'balanced');
+});
+
+test('init supports automatic delegation opt-out while retaining generated native agents', async (t) => {
+  const fx = await fixture(t, true);
+  const result = fx.run('init', '--local', '--profile', 'balanced', '--yes', '--no-auto-delegation');
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const config = JSON.parse(await readFile(path.join(fx.project, '.tiersplice.json'), 'utf8'));
+  assert.equal(config.delegation.automatic, false);
+  await access(path.join(fx.project, '.claude', 'agents', 'tiersplice-implementer.md'));
+  await assert.rejects(access(path.join(fx.project, 'CLAUDE.md')));
+  const doctor = JSON.parse(fx.run('doctor', '--local', '--json').stdout);
+  assert.ok(doctor.diagnostics.some((item) => item.code === 'AUTO_DELEGATION_DISABLED'));
+});
+
+test('uninstall removes a managed instruction block after its supported file is moved', async (t) => {
+  const fx = await fixture(t, true);
+  assert.equal(fx.run('init', '--local', '--profile', 'balanced', '--yes').status, 0);
+  const oldFile = path.join(fx.project, 'CLAUDE.md');
+  const movedFile = path.join(fx.project, '.claude', 'CLAUDE.md');
+  await mkdir(path.dirname(movedFile), { recursive: true });
+  await rename(oldFile, movedFile);
+  const uninstall = fx.run('uninstall', '--local');
+  assert.equal(uninstall.status, 0, uninstall.stderr || uninstall.stdout);
+  await assert.rejects(access(movedFile));
+});
+
+test('status and doctor detect duplicate managed instruction markers', async (t) => {
+  const fx = await fixture(t, true);
+  assert.equal(fx.run('init', '--local', '--profile', 'balanced', '--yes').status, 0);
+  const file = path.join(fx.project, 'CLAUDE.md');
+  const content = await readFile(file, 'utf8');
+  await writeFile(file, `${content}\n${content.slice(content.indexOf('<!-- tiersplice:auto-delegation:start v1 -->') )}`);
+  const status = JSON.parse(fx.run('status', '--local', '--json').stdout);
+  assert.equal(status.managedFiles.find((item) => item.type === 'instruction-block').status, 'instruction-block-conflict');
+  const doctor = JSON.parse(fx.run('doctor', '--local', '--json').stdout);
+  assert.ok(doctor.diagnostics.some((item) => item.code === 'MANAGED_FILE_DRIFT'));
 });
 
 test('framework files remain untouched and are not probed', async (t) => {

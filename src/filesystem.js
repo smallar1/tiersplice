@@ -17,10 +17,12 @@ export function getPaths(scope, cwd = process.cwd()) {
   if (scope === 'global') {
     const configHome = process.env.XDG_CONFIG_HOME || path.join(home, '.config');
     const base = process.platform === 'win32' ? path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'tiersplice') : path.join(configHome, 'tiersplice');
-    return { root: base, config: path.join(base, 'config.json'), manifest: path.join(base, 'manifest.json'), claudeAgents: path.join(home, '.claude', 'agents'), codexAgents: path.join(home, '.codex', 'agents') };
+    const claudeHome = path.resolve(process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'));
+    const codexHome = path.resolve(process.env.CODEX_HOME || path.join(home, '.codex'));
+    return { root: base, config: path.join(base, 'config.json'), manifest: path.join(base, 'manifest.json'), claudeAgents: path.join(claudeHome, 'agents'), codexAgents: path.join(codexHome, 'agents'), claudeInstructions: path.join(claudeHome, 'CLAUDE.md'), codexInstructions: path.join(codexHome, 'AGENTS.md') };
   }
   const root = path.resolve(cwd);
-  return { root, config: path.join(root, '.tiersplice.json'), manifest: path.join(root, '.tiersplice-manifest.json'), claudeAgents: path.join(root, '.claude', 'agents'), codexAgents: path.join(root, '.codex', 'agents') };
+  return { root, config: path.join(root, '.tiersplice.json'), manifest: path.join(root, '.tiersplice-manifest.json'), claudeAgents: path.join(root, '.claude', 'agents'), codexAgents: path.join(root, '.codex', 'agents'), claudeInstructions: path.join(root, 'CLAUDE.md'), codexInstructions: path.join(root, 'AGENTS.md') };
 }
 
 export async function projectRoot(cwd) {
@@ -41,6 +43,10 @@ export async function resolvePaths(scope, cwd = process.cwd()) {
     paths.manifest = path.join(paths.root, '.tiersplice-manifest.json');
     paths.claudeAgents = path.join(paths.root, '.claude', 'agents');
     paths.codexAgents = path.join(paths.root, '.codex', 'agents');
+    const claudeRoot = path.join(paths.root, '.claude');
+    const codexRoot = path.join(paths.root, '.codex');
+    try { await access(paths.claudeInstructions); } catch { try { await access(path.join(claudeRoot, 'CLAUDE.md')); paths.claudeInstructions = path.join(claudeRoot, 'CLAUDE.md'); } catch {} }
+    try { await access(paths.codexInstructions); } catch { try { await access(path.join(codexRoot, 'AGENTS.md')); paths.codexInstructions = path.join(codexRoot, 'AGENTS.md'); } catch {} }
   }
   return paths;
 }
@@ -53,10 +59,11 @@ export async function readManifest(file) {
     if (!manifest || manifest.schemaVersion !== 1 || !manifest.files || typeof manifest.files !== 'object' || Array.isArray(manifest.files)) throw new Error('invalid manifest structure');
     for (const [target, record] of Object.entries(manifest.files)) {
       if (!path.isAbsolute(target) || target !== path.resolve(target) || !record || typeof record !== 'object' || !/^[a-f0-9]{64}$/.test(record.currentHash || '')) throw new Error(`invalid ownership record for ${target}`);
-      if (record.kind !== undefined && !['config', 'source-config', 'generated-output', 'native-agent'].includes(record.kind)) throw new Error(`invalid ownership kind for ${target}`);
+      if (record.kind !== undefined && !['config', 'source-config', 'generated-output', 'native-agent', 'instruction-block'].includes(record.kind)) throw new Error(`invalid ownership kind for ${target}`);
       if (record.created !== undefined && typeof record.created !== 'boolean') throw new Error(`invalid creation flag for ${target}`);
       if (record.userModified !== undefined && typeof record.userModified !== 'boolean') throw new Error(`invalid user modification flag for ${target}`);
       if (record.originalHash !== undefined && record.originalHash !== null && !/^[a-f0-9]{64}$/.test(record.originalHash)) throw new Error(`invalid original hash for ${target}`);
+      if (record.insertedSeparator !== undefined && typeof record.insertedSeparator !== 'string') throw new Error(`invalid instruction separator for ${target}`);
     }
     return manifest;
   } catch (error) {
@@ -65,7 +72,104 @@ export async function readManifest(file) {
   }
 }
 
-async function assertNoSymlinkPath(file, boundary = path.parse(path.resolve(file)).root) {
+const POLICY_START = '<!-- tiersplice:auto-delegation:start v1 -->';
+const POLICY_END = '<!-- tiersplice:auto-delegation:end v1 -->';
+
+function policyBlock(text) {
+  if (/<!--\s*tiersplice:auto-delegation:(?!start v1 -->|end v1 -->)/.test(text)) throw new Error('unrecognized or malformed TierSplice delegation marker');
+  const starts = [...text.matchAll(/<!-- tiersplice:auto-delegation:start v1 -->/g)];
+  const ends = [...text.matchAll(/<!-- tiersplice:auto-delegation:end v1 -->/g)];
+  if (starts.length === 0 && ends.length === 0) return null;
+  if (starts.length !== 1 || ends.length !== 1 || starts[0].index >= ends[0].index) throw new Error('missing, duplicate, nested, or mismatched TierSplice delegation markers');
+  const end = ends[0].index + POLICY_END.length;
+  return { content: text.slice(starts[0].index, end), start: starts[0].index, end };
+}
+
+export function inspectInstructionBlock(text) {
+  return policyBlock(text)?.content ?? null;
+}
+
+export const instructionMarkers = { start: POLICY_START, end: POLICY_END };
+
+export async function applyInstructionBlocks(changes, manifestPath, { dryRun = false, allowedRoots = [path.dirname(manifestPath)], allowedInstructionFiles = [] } = {}) {
+  const manifest = await readManifest(manifestPath);
+  const prepared = [];
+  const conflicts = [];
+  for (const change of changes) {
+    const target = path.resolve(change.path);
+    const priorLocation = Object.entries(manifest.files).find(([file, record]) => record.kind === 'instruction-block' && path.basename(file) === path.basename(target) && path.resolve(file) !== target);
+    if (change.kind === 'instruction-block' && priorLocation) {
+      conflicts.push(`${target}: TierSplice routing guidance is already owned at ${priorLocation[0]}; resolve the moved instruction file before syncing`);
+      continue;
+    }
+    const root = allowedRoots.map((item) => path.resolve(item)).find((item) => target.startsWith(`${item}${path.sep}`));
+    const instructionAllowed = allowedInstructionFiles.length
+      ? allowedInstructionFiles.some((file) => path.resolve(file) === target)
+      : path.dirname(target) === path.resolve(path.dirname(manifestPath));
+    if (!root || !instructionAllowed || !['CLAUDE.md', 'AGENTS.md'].includes(path.basename(target)) || !['instruction-block', 'instruction-remove'].includes(change.kind)) {
+      conflicts.push(`${target}: instruction target is outside the allowlist`); continue;
+    }
+    try {
+      await assertNoSymlinkPath(path.dirname(target), root);
+      try { if ((await lstat(target)).isSymbolicLink()) throw new Error('refusing symlink instruction file'); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      const old = await readFile(target, 'utf8').catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+      const found = old === null ? null : policyBlock(old);
+      let previousFile = target;
+      let previous = manifest.files[target];
+      if (change.kind === 'instruction-block') {
+        if (found && (!previous || previous.kind !== 'instruction-block' || hash(found.content) !== previous.currentHash)) throw new Error('existing delegation block is not an unchanged TierSplice-managed block');
+        if (!found && previous?.kind === 'instruction-block') throw new Error('managed delegation block was removed or modified');
+        const newline = old?.includes('\r\n') ? '\r\n' : '\n';
+        const block = `${POLICY_START}${newline}${change.content.trim().replace(/\r?\n/g, newline)}${newline}${POLICY_END}`;
+        const insertedSeparator = found ? previous?.insertedSeparator ?? '' : old && !old.endsWith('\n') ? newline : '';
+        const next = found ? `${old.slice(0, found.start)}${block}${old.slice(found.end)}` : `${old ?? ''}${insertedSeparator}${block}`;
+        prepared.push({ target, old, next, block, previous, insertedSeparator });
+      } else {
+        if (!found) {
+          if (previous?.kind === 'instruction-block' && old !== null) throw new Error('managed delegation block is missing or malformed');
+          if (previous?.kind === 'instruction-block') prepared.push({ target, old: null, next: null, remove: true, previous, previousFile });
+          continue;
+        }
+        if (!previous && old !== null) {
+          const moved = Object.entries(manifest.files).find(([file, record]) => file !== target && path.basename(file) === path.basename(target) && record.kind === 'instruction-block' && hash(found.content) === record.currentHash);
+          if (moved) [previousFile, previous] = moved;
+        }
+        if (!previous || previous.kind !== 'instruction-block' || hash(found.content) !== previous.currentHash) throw new Error('delegation block was modified; preserving user instructions');
+        let next = `${old.slice(0, found.start)}${old.slice(found.end)}`;
+        const separator = previous.insertedSeparator || '';
+        if (separator && old.slice(0, found.start).endsWith(separator)) next = `${next.slice(0, next.length - separator.length)}`;
+        prepared.push({ target, old, next: previous.created && next === '' ? null : next, remove: true, previous, previousFile });
+      }
+    } catch (error) { conflicts.push(`${target}: ${error.message}`); }
+  }
+  if (conflicts.length) return { applied: [], conflicts, manifest };
+  if (dryRun) return { applied: prepared.map((item) => ({ path: item.target, action: item.remove ? 'remove-block' : item.old === null ? 'create-block' : 'update-block' })), conflicts, manifest };
+  const oldManifest = await readFile(manifestPath).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+  const changed = [];
+  try {
+    for (const item of prepared) {
+      if (item.remove && item.next === null) await rm(item.target, { force: true });
+      else if (item.next !== undefined) await atomicWrite(item.target, item.next, { boundary: allowedRoots.map((root) => path.resolve(root)).find((root) => item.target.startsWith(`${root}${path.sep}`)) });
+      changed.push(item);
+      if (item.remove) { delete manifest.files[item.target]; if (item.previousFile && item.previousFile !== item.target) delete manifest.files[item.previousFile]; }
+      else manifest.files[item.target] = { created: item.previous?.created ?? item.old === null, originalHash: item.previous?.originalHash ?? (item.old === null ? null : hash(item.old)), currentHash: hash(item.block), kind: 'instruction-block', insertedSeparator: item.insertedSeparator ?? item.previous?.insertedSeparator ?? '' };
+    }
+    if (changed.length) await atomicWrite(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { boundary: path.dirname(manifestPath) });
+  } catch (error) {
+    const rollbackErrors = [];
+    for (const item of changed.reverse()) {
+      if (item.old === null) await rm(item.target, { force: true }).catch((failure) => rollbackErrors.push(failure.message));
+      else await atomicWrite(item.target, item.old, { boundary: allowedRoots.map((root) => path.resolve(root)).find((root) => item.target.startsWith(`${root}${path.sep}`)) }).catch((failure) => rollbackErrors.push(failure.message));
+    }
+    if (oldManifest) await atomicWrite(manifestPath, oldManifest, { boundary: path.dirname(manifestPath) }).catch((failure) => rollbackErrors.push(failure.message));
+    else await rm(manifestPath, { force: true }).catch((failure) => rollbackErrors.push(failure.message));
+    throw new Error(`Instruction update failed; ${rollbackErrors.length ? `rollback incomplete (${rollbackErrors.join('; ')})` : 'prior files restored'}: ${error.message}`);
+  }
+  return { applied: prepared.map((item) => ({ path: item.target, action: item.remove ? 'remove-block' : item.old === null ? 'create-block' : 'update-block' })), conflicts, manifest };
+}
+
+export async function assertNoSymlinkPath(file, boundary = path.parse(path.resolve(file)).root) {
   const absolute = path.resolve(file);
   const base = path.resolve(boundary);
   const relative = path.relative(base, absolute);
@@ -195,6 +299,7 @@ export async function listOwned(manifestPath, { allowedRoots = [path.dirname(man
   const scopeRoot = path.dirname(path.resolve(manifestPath));
   const agentRoots = allowedRoots.map((root) => path.resolve(root)).filter((root) => root !== scopeRoot);
   for (const [file, record] of Object.entries(manifest.files)) {
+    if (record.kind === 'instruction-block') continue;
     const target = path.resolve(file);
     const allowed = allowedRoots.some((root) => {
       const base = path.resolve(root);

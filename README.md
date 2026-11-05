@@ -6,7 +6,7 @@ TierSplice is an open-source, installable CLI that helps existing coding tools s
 
 Instead of replacing your agents, TierSplice gives them a shared, configurable model-tier policy.
 
-> **Project status: `0.2.1-beta.0` beta candidate.** This prerelease is opt-in and is not promoted to npm `latest`. Runtime model availability and actual agent invocation are not verified. See [IMPLEMENTATION_STATUS.md](./IMPLEMENTATION_STATUS.md) for evidence and [docs/PUBLISHING.md](./docs/PUBLISHING.md) for the manual release procedure.
+> **Project status: `0.3.0-beta.0` beta candidate.** Automatic routing guidance and managed instruction blocks are implemented; native automatic agent invocation has not been verified. This prerelease is opt-in and is not promoted to npm `latest`. See [IMPLEMENTATION_STATUS.md](./IMPLEMENTATION_STATUS.md) for evidence and [docs/PUBLISHING.md](./docs/PUBLISHING.md) for the manual release procedure.
 
 ## What TierSplice does
 
@@ -38,7 +38,7 @@ npx tiersplice@beta init --local
 npx tiersplice@beta init --global --profile balanced --yes
 ```
 
-Global setup configures native user-level agents. Local setup writes only to the current project and its supported local configuration. Global setup does not rewrite every existing repository.
+Global setup configures native user-level agents and concise routing guidance. Local setup writes only to the current project and its supported local configuration. Global setup does not rewrite every existing repository. Setup still asks only for scope and profile.
 
 **Prerequisites:** Node.js 20.11+. Claude Code or Codex is needed to generate native agents; with neither detected, TierSplice still saves its policy and reports that routing is inactive.
 
@@ -74,6 +74,9 @@ npx tiersplice@beta config edit
 # Reapply owned settings after changing configuration
 npx tiersplice@beta sync --local
 
+# Disable proactive routing at this scope; agents remain available explicitly
+npx tiersplice@beta init --local --profile balanced --yes --no-auto-delegation
+
 # See exactly what would be removed
 npx tiersplice@beta uninstall --local --dry-run
 ```
@@ -96,13 +99,15 @@ Local configuration overrides applicable global defaults. TierSplice will preser
 
 `resolve` returns one offline JSON policy decision for a runtime and role or tier. Its stable v1 schema and provenance fields are documented in [docs/resolve.md](./docs/resolve.md) and [schemas/resolve.schema.json](./schemas/resolve.schema.json). It reports configured preference only; it does not test model access or execution.
 
+Automatic delegation is advisory. Use normal prompts after setup; no TierSplice command or agent name is needed. Check `status` and `doctor` to distinguish configured and installed guidance from observed invocation. See [automatic delegation](./docs/automatic-delegation.md) for placement, opt-out behavior, conflicts, and a manual verification checklist.
+
 ## Compatibility and limitations
 
-TierSplice is **not** a standalone coding agent. It relies on the native subagent and model-selection capabilities of your installed tools. Some routing can be pinned in native agent files; other routing advice is heuristic and depends on the parent agent or workflow actually delegating.
+TierSplice is **not** a standalone coding agent. It relies on the native subagent and model-selection capabilities of your installed tools. Routing instructions are guidance, not a deterministic dispatcher; a host may handle eligible work directly. Actual automatic invocation remains unverified.
 
 Third-party workflow tools retain their own planning and delegation. `resolve` reports TierSplice's configured policy only; it does not launch a model or guarantee that another tool uses the result.
 
-TierSplice does **not** bypass Claude Code or Codex subscription limits, guarantee usage savings, or silently switch to paid API providers.
+TierSplice does **not** change the parent model, bypass Claude Code or Codex subscription limits, guarantee usage savings, or silently switch to paid API providers. Child model pins do not make parent model usage free; additional agents can add latency and usage.
 
 ## Feature roadmap
 
@@ -110,8 +115,8 @@ TierSplice does **not** bypass Claude Code or Codex subscription limits, guarant
 | --- | --- | --- |
 | **v0.1** | CLI, global/local setup, profiles, Claude/Codex agents, configuration, status/doctor, sync/uninstall | Implemented |
 | **v0.2** | Debugger agent, policy resolution API, framework-neutral operation | Implemented; native host invocation unverified |
-| **v0.3** | Explicit, user-triggered Claude Code ↔ Codex task handoffs | Future |
-| **v0.4+** | Optional, bounded cross-platform failover on supported usage-limit errors | Exploratory |
+| **v0.3** | Automatic native delegation guidance, agent descriptions, and safe managed instruction blocks | Implemented; live host verification outstanding |
+| **Later** | Explicit Claude Code ↔ Codex task handoffs and quota-aware failover | Deferred / exploratory |
 
 Optional external framework adapters may be considered later if users request them; they are not part of v0.2.
 

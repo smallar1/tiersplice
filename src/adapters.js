@@ -11,9 +11,9 @@ const runVersion = (command) => {
 async function exists(file) { try { await access(file); return true; } catch { return false; } }
 
 export async function detectRuntimes(paths) {
-  const home = paths.root === paths.config ? paths.root : undefined;
-  const claudeHome = process.platform === 'win32' ? path.join(process.env.USERPROFILE || '', '.claude') : path.join(process.env.HOME || '', '.claude');
-  const codexHome = process.platform === 'win32' ? path.join(process.env.USERPROFILE || '', '.codex') : path.join(process.env.HOME || '', '.codex');
+  const home = process.platform === 'win32' ? process.env.USERPROFILE || '' : process.env.HOME || '';
+  const claudeHome = path.resolve(process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'));
+  const codexHome = path.resolve(process.env.CODEX_HOME || path.join(home, '.codex'));
   const claudeVersion = runVersion('claude');
   const codexVersion = runVersion('codex');
   const claude = claudeVersion || await exists(path.join(claudeHome, 'settings.json')) || await exists(paths.claudeAgents);
@@ -30,12 +30,12 @@ export function renderClaude(policy) {
     const tier = policy.roles[role];
     const route = policy.routes.claude[tier];
     const descriptions = {
-      docs: 'Handle documentation, explanations, and concise repository research.',
-      explorer: 'Inspect code and report findings without modifying files.',
-      implementer: 'Implement scoped changes and report files changed.',
-      debugger: 'Investigate a scoped bug, identify its cause, apply a focused fix, and report evidence.',
-      architect: 'Analyze system design and propose concrete implementation tradeoffs.',
-      reviewer: 'Review changes for correctness, regressions, and security issues without editing.'
+      docs: 'Use proactively for scoped documentation edits or concise documentation research; do not implement code changes.',
+      explorer: 'Use proactively to locate implementation and summarize patterns; read-only, do not modify files.',
+      implementer: 'Use proactively for bounded feature implementation, ordinary bug fixes, and targeted tests; report changed files.',
+      debugger: 'Use proactively for intermittent failures or complex errors; find the cause before a focused fix and report verification.',
+      architect: 'Use proactively for difficult design choices and system tradeoffs; analyze first and do not edit unless asked.',
+      reviewer: 'Use proactively when changed code needs correctness, regression, or security review; read-only, do not edit.'
     };
     const tools = suffix === 'explorer' || suffix === 'reviewer' ? 'tools: Read, Grep, Glob\n' : '';
     const safe = (value) => {
@@ -55,9 +55,10 @@ export function renderCodex(policy) {
   return Object.entries(names).map(([role, suffix]) => {
     const tier = policy.roles[role];
     const route = policy.routes.codex[tier];
-    const instructions = `${({ documentation: 'Update documentation and explain relevant changes.', exploration: 'Inspect the repository and report findings without editing.', implementation: 'Apply scoped code changes and report files changed.', debugging: 'Investigate and fix a scoped bug, then report evidence.', architecture: 'Analyze system design and concrete tradeoffs.', review: 'Inspect correctness and regressions without editing.' })[role]} TierSplice ${policy.profile} requests ${tier}; host settings and account availability may override it.`;
+    const instructions = `${({ documentation: 'Use proactively for scoped documentation edits; do not implement code changes.', exploration: 'Use proactively to locate code and summarize patterns; inspect only and report findings without editing.', implementation: 'Use proactively for bounded feature work, ordinary bug fixes, and targeted tests; report changed files.', debugging: 'Use proactively for failures and complex errors; identify the cause before a focused fix and report verification.', architecture: 'Use proactively for difficult design choices; analyze tradeoffs and do not edit unless asked.', review: 'Use proactively to review changed code for correctness, regressions, and security; report findings without editing.' })[role]} TierSplice ${policy.profile} requests ${tier}; host settings and account availability may override it.`;
     const effort = route.effort === 'max' ? '' : `model_reasoning_effort = ${tomlString(route.effort)}\n`;
-    const body = `name = ${tomlString(`tiersplice-${suffix}`)}\ndescription = ${tomlString(`TierSplice ${role} agent (${tier} tier).`)}\nmodel = ${tomlString(route.model)}\n${effort}developer_instructions = ${tomlString(instructions)}\n`;
+    const description = `Use proactively for ${({ documentation: 'scoped documentation edits', exploration: 'bounded read-only code discovery', implementation: 'bounded feature implementation and ordinary fixes', debugging: 'test failures and complex errors', architecture: 'difficult design tradeoffs', review: 'read-only code review' })[role]} (${tier} tier).`;
+    const body = `name = ${tomlString(`tiersplice-${suffix}`)}\ndescription = ${tomlString(description)}\nmodel = ${tomlString(route.model)}\n${effort}developer_instructions = ${tomlString(instructions)}\n`;
     parseCodexAgent(body);
     return { name: suffix, body };
   });

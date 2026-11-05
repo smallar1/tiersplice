@@ -26,6 +26,13 @@
         "enabled": { "type": "boolean" },
         "maxRetries": { "const": 1 }
       }
+    },
+    "delegation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "automatic": { "type": "boolean" }
+      }
     }
   },
   "$defs": {

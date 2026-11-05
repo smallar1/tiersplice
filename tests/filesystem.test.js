@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { applyManaged, hash, listOwned, readManifest, uninstallOwned } from '../src/filesystem.js';
+import { applyInstructionBlocks, applyManaged, hash, listOwned, readManifest, uninstallOwned } from '../src/filesystem.js';
 
 async function fixture(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'tiersplice-fs-'));
@@ -20,6 +20,72 @@ test('malformed and traversal ownership manifest records are rejected', async (t
   await assert.rejects(readManifest(fx.manifest), /invalid ownership record/);
   await writeFile(fx.manifest, JSON.stringify({ schemaVersion: 1, files: { [path.join(fx.agents, 'tiersplice-worker.md')]: { currentHash: 'bad-hash' } } }));
   await assert.rejects(readManifest(fx.manifest), /invalid ownership record/);
+});
+
+test('instruction blocks preserve existing CRLF content, update idempotently, and uninstall only the owned block', async (t) => {
+  const fx = await fixture(t);
+  const file = path.join(fx.root, 'CLAUDE.md');
+  const original = '# User notes\r\nKeep this text.\r\n';
+  await writeFile(file, original);
+  const change = [{ path: file, kind: 'instruction-block', content: 'Delegate useful bounded tasks.' }];
+  assert.equal((await applyInstructionBlocks(change, fx.manifest, { allowedRoots: [fx.root] })).conflicts.length, 0);
+  const installed = await readFile(file, 'utf8');
+  assert.ok(installed.startsWith(original));
+  assert.match(installed, /tiersplice:auto-delegation:start v1 -->\r\nDelegate useful bounded tasks\./);
+  const again = await applyInstructionBlocks(change, fx.manifest, { allowedRoots: [fx.root] });
+  assert.deepEqual(again.applied.map((item) => item.action), ['update-block']);
+  await writeFile(file, `${installed}User appended text\r\n`);
+  const removed = await applyInstructionBlocks([{ path: file, kind: 'instruction-remove', content: '' }], fx.manifest, { allowedRoots: [fx.root] });
+  assert.equal(removed.conflicts.length, 0);
+  const after = await readFile(file, 'utf8');
+  assert.match(after, /# User notes\r\nKeep this text\./);
+  assert.match(after, /User appended text/);
+  assert.doesNotMatch(after, /tiersplice:auto-delegation/);
+});
+
+test('modified or malformed instruction blocks fail closed', async (t) => {
+  const fx = await fixture(t);
+  const file = path.join(fx.root, 'AGENTS.md');
+  await writeFile(file, 'User instructions\n');
+  await applyInstructionBlocks([{ path: file, kind: 'instruction-block', content: 'Route work.' }], fx.manifest, { allowedRoots: [fx.root] });
+  await writeFile(file, (await readFile(file, 'utf8')).replace('Route work.', 'Changed by user.'));
+  const result = await applyInstructionBlocks([{ path: file, kind: 'instruction-remove', content: '' }], fx.manifest, { allowedRoots: [fx.root] });
+  assert.match(result.conflicts[0], /modified/);
+  assert.deepEqual(result.applied, []);
+  assert.match(await readFile(file, 'utf8'), /Changed by user/);
+});
+
+test('instruction block writes refuse symlink targets without changing their destinations', async (t) => {
+  const fx = await fixture(t);
+  const destination = path.join(fx.root, 'outside.md');
+  const link = path.join(fx.root, 'CLAUDE.md');
+  const original = 'User-owned instructions\n';
+  await writeFile(destination, original);
+  await symlink(destination, link);
+  const result = await applyInstructionBlocks([{ path: link, kind: 'instruction-block', content: 'Route work.' }], fx.manifest, { allowedRoots: [fx.root] });
+  assert.match(result.conflicts[0], /symlink/);
+  assert.equal(await readFile(destination, 'utf8'), original);
+});
+
+test('uninstall follows a moved managed instruction block and preserves user whitespace', async (t) => {
+  const fx = await fixture(t);
+  const originalPath = path.join(fx.root, 'CLAUDE.md');
+  const movedPath = path.join(fx.root, '.claude', 'CLAUDE.md');
+  await writeFile(originalPath, '');
+  await applyInstructionBlocks([{ path: originalPath, kind: 'instruction-block', content: 'Route useful tasks.' }], fx.manifest, { allowedRoots: [fx.root] });
+  await rename(originalPath, movedPath);
+  const movedRemoval = await applyInstructionBlocks([{ path: movedPath, kind: 'instruction-remove', content: '' }], fx.manifest, { allowedRoots: [fx.root], allowedInstructionFiles: [originalPath, movedPath] });
+  assert.equal(movedRemoval.conflicts.length, 0);
+  assert.equal(await readFile(movedPath, 'utf8'), '');
+
+  const createdPath = path.join(fx.root, 'CLAUDE.md');
+  await rm(createdPath, { force: true });
+  await applyInstructionBlocks([{ path: createdPath, kind: 'instruction-block', content: 'Route useful tasks.' }], fx.manifest, { allowedRoots: [fx.root] });
+  const created = await readFile(createdPath, 'utf8');
+  await writeFile(createdPath, `${created}  \n`);
+  const removal = await applyInstructionBlocks([{ path: createdPath, kind: 'instruction-remove', content: '' }], fx.manifest, { allowedRoots: [fx.root] });
+  assert.equal(removal.conflicts.length, 0);
+  assert.equal(await readFile(createdPath, 'utf8'), '  \n');
 });
 
 test('uninstall preserves prefix-named files without a TierSplice ownership signature', async (t) => {

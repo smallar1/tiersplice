@@ -20,7 +20,7 @@ export const DEFAULT_ROLES = {
 
 export function validateConfig(value, file = 'config') {
   const errors = [];
-  const known = new Set(['schemaVersion', 'profile', 'models', 'roles', 'escalation']);
+  const known = new Set(['schemaVersion', 'profile', 'models', 'roles', 'escalation', 'delegation']);
   if (!value || typeof value !== 'object' || Array.isArray(value)) return [`${file}: expected a JSON object`];
   for (const key of Object.keys(value)) if (!known.has(key)) errors.push(`${file}.${key}: unknown property`);
   if (value.schemaVersion !== 1) errors.push(`${file}.schemaVersion: expected 1`);
@@ -52,6 +52,14 @@ export function validateConfig(value, file = 'config') {
       for (const key of Object.keys(e)) if (!['enabled', 'maxRetries'].includes(key)) errors.push(`${file}.escalation.${key}: unknown property`);
       if (e.enabled !== undefined && typeof e.enabled !== 'boolean') errors.push(`${file}.escalation.enabled: expected a boolean`);
       if (e.maxRetries !== undefined && e.maxRetries !== 1) errors.push(`${file}.escalation.maxRetries: only the advisory ceiling 1 is supported`);
+    }
+  }
+  if (value.delegation !== undefined) {
+    const delegation = value.delegation;
+    if (!delegation || typeof delegation !== 'object' || Array.isArray(delegation)) errors.push(`${file}.delegation: expected an object`);
+    else {
+      for (const key of Object.keys(delegation)) if (key !== 'automatic') errors.push(`${file}.delegation.${key}: unknown property`);
+      if (delegation.automatic !== undefined && typeof delegation.automatic !== 'boolean') errors.push(`${file}.delegation.automatic: expected a boolean`);
     }
   }
   return errors;

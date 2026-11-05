@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0-beta.0 — Automatic delegation beta (unpublished)
+
+- Install concise, profile-agnostic Claude Code and Codex parent routing guidance with `init` and `sync`, while retaining all six configured native agents.
+- Add additive `delegation.automatic` configuration and `--no-auto-delegation`; generated agents remain available when proactive guidance is disabled.
+- Add marker-owned instruction block updates, drift checks, dry-run reporting, and block removal that preserves surrounding user instructions.
+- Extend `status` and `doctor` to distinguish installed guidance from native invocation, which remains unverified.
+- Document host limitations, manual invocation verification, parent model usage, and framework-neutral `resolve` semantics.
+- Native live-session checks, dogfooding, and release validation remain outstanding; do not publish this beta as a verified automatic dispatcher.
+
 ## 0.2.1-beta.0 — Beta candidate (unpublished)
 
 - Prepare an opt-in npm beta with synchronized package and CLI versions and an explicit npm file allowlist.
