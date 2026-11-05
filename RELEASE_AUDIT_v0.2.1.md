@@ -6,7 +6,7 @@
 
 - Before edits: branch `feature/v0.2-native-routing-interop`, HEAD `a381b6df26f42e092782970c1d38fdb936a0e1b0`, package version `0.2.0`.
 - Existing changes: deleted tracked `SPEC.md`; untracked `docs/specs/`. Preserved.
-- `git diff --check` initially passed. `.git` was available for read only; requested release branch could not be created and no remote fetch was run. `gitleaks git --redact --no-banner` scanned the 3 locally available commits (~144.63 KB) and reported no leaks. This does not include un-fetched remote history or guarantee absence of secrets.
+- `git diff --check` initially passed. `.git` was read-only at first; the requested release branch was later created and pushed with only the hardening files staged. No remote fetch was run. `gitleaks git --redact --no-banner` scanned the 3 locally available commits (~144.63 KB) and reported no leaks. This does not cover separate, un-fetched remote history or guarantee absence of secrets.
 - Root inventory showed source, schemas, docs, tests, package metadata, workflow, and release docs. Ignored `.DS_Store` files were present; they are now covered by `.gitignore`.
 
 ## Findings
@@ -18,9 +18,10 @@
 | fixed | npm file shipping was implicit and had no content assertion | `files` allowlist retained and pack smoke now asserts the complete expected file set |
 | fixed | Local secrets and machine ownership manifest lacked ignore guidance | Added minimal `.gitignore`; `.tiersplice.json` is intentionally not ignored |
 | fixed | No operator beta publishing procedure | Added `docs/PUBLISHING.md` with manual beta-only flow and recovery guidance |
-| warning | Requested release branch and remote push scope were not audited | Local available history scanned with Gitleaks; no fetch and no writable Git metadata, so remote-only commits and final push scope remain unverified |
+| fixed | Cross-platform CI failed in tests and package smoke | Windows tests expected XDG paths instead of the Windows `%APPDATA%` path; smoke dry-run returned the CLI's warning exit when no host runtimes were installed. Fixtures now isolate `%APPDATA%` and seed synthetic runtime markers. Local checks pass; GitHub rerun is pending. |
+| warning | Remote-only history from other branches was not audited | Gitleaks scanned local history and the working tree; the release commit staged only the intended 13 files, but no remote fetch was run |
 | warning | Native runtime execution and real model access are unverified | No authenticated or paid runtime tests were performed |
-| warning | Concurrent symlink swaps, rollback failure, and Windows CI failures are not fully assessed | Existing tests cover common path/rollback cases; no current GitHub logs available here |
+| warning | Concurrent symlink swaps and rollback failure are not fully assessed | Existing tests cover common path/rollback cases; hostile concurrency and rollback-failure matrix remains incomplete |
 
 ## Dependency and command review
 
@@ -30,7 +31,7 @@
 - `npm run check`: passed on Node `v26.13.0` / npm `11.20.0`.
 - `npm test`: passed, 22 tests.
 - `npm run smoke:pack`: passed, including package metadata/bin checks, exact package file allowlist, `--version`, `--help`, offline `resolve`, and local dry-run in a disposable project.
-- `npm pack --dry-run --json`: passed; package is `tiersplice@0.2.1-beta.0`, exactly 13 allowlisted entries, 20,755 bytes compressed / 74,304 bytes unpacked. No fixtures, tests, credentials, archives, or machine manifests are included.
+- `npm pack --dry-run --json`: passed; package is `tiersplice@0.2.1-beta.0`, exactly 13 allowlisted entries. No fixtures, tests, credentials, archives, or machine manifests are included.
 - Package scripts use local Node/npm commands; `prepack` runs check and tests. `pack-smoke` installs a locally produced tarball into a disposable directory with scripts ignored; no application network request is introduced.
 - Workflow uses `actions/checkout@v4` and `actions/setup-node@v4`; actions are major-version tags, not immutable SHA pins.
 
@@ -38,9 +39,16 @@
 
 Expected npm files (verified exactly): `CHANGELOG.md`, `IMPLEMENTATION_STATUS.md`, `LICENSE`, `README.md`, `RELEASE_AUDIT_v0.2.1.md`, `docs/resolve.md`, `package.json`, both JSON schemas, and `src/{adapters,cli,config,filesystem}.js`. `docs/PUBLISHING.md`, tests, workflow, and specs are Git documentation and intentionally excluded from npm.
 
+## GitHub CI failure diagnosis
+
+The initial workflow attempts for commit `30c9b49ba98f0905f11a2fc76d691792c774a1aa` failed in two independent places: Windows tests used an expected global config path under XDG even though Windows resolves global config under `%APPDATA%`; all-platform pack smoke ran local init without a detected Claude/Codex runtime, so its warning exit code caused the smoke command to fail. The Ubuntu Node 20 job was cancelled by matrix fail-fast after other jobs failed. Regression fixes are in the follow-up commit; the new GitHub matrix result must be checked before publication.
+
+- Failed push run: [41940928391](https://github.com/smallar1/tiersplice/actions/runs/41940928391).
+- Failed pull-request run: [41940955807](https://github.com/smallar1/tiersplice/actions/runs/41940955807).
+
 ## Required remaining gates
 
 - Run all local checks after the final changes and inspect actual packed file list.
 - Obtain a writable checkout on the intended feature branch; fetch and verify origin baseline; run history-aware secret scanning and inspect intended push scope.
-- Observe the supported OS/Node CI matrix, investigate Windows results, and review the exact tarball plus `npm publish --dry-run --tag beta --access public`.
+- Confirm the new supported OS/Node CI matrix run passes, and review the exact tarball plus `npm publish --dry-run --tag beta --access public`.
 - Maintainer approval is required before any merge or publication. Use `npx tiersplice@beta init --local --dry-run` as the first real-repository trial.

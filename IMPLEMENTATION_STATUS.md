@@ -3,8 +3,9 @@
 ## Release context
 
 - Target package version: `0.2.1-beta.0` (beta candidate; not published).
-- Observed checkout: branch `feature/v0.2-native-routing-interop`, HEAD `a381b6df26f42e092782970c1d38fdb936a0e1b0`.
-- Requested `feature/v0.2.1-release-hardening` branch was not created: Git metadata is read-only in this workspace. No fetch, push, merge, tag, or publication was performed.
+- Current branch: `feature/v0.2.1-release-hardening`; release-hardening changes are committed and pushed for review. The latest CI portability fixes are being prepared on the same branch.
+- Audit baseline before implementation: branch `feature/v0.2-native-routing-interop`, HEAD `a381b6df26f42e092782970c1d38fdb936a0e1b0`.
+- No merge, tag, or npm publication was performed. Existing `SPEC.md` deletion and untracked `docs/specs/` remain local and uncommitted.
 - Pre-existing workspace changes preserved: deleted `SPEC.md` and untracked `docs/specs/`.
 
 ## Feature inventory

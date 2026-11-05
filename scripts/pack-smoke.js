@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,7 +44,12 @@ try {
   if (JSON.parse(resolved).assignment !== 'policy-only') throw new Error('Packaged CLI resolve did not return a policy-only decision.');
   const disposableProject = path.join(temp, 'project');
   await mkdir(path.join(disposableProject, '.git'), { recursive: true });
-  execFileSync(process.execPath, [cli, 'init', '--local', '--yes', '--dry-run', '--cwd', disposableProject], { cwd: disposableProject, stdio: 'ignore', env: { ...env, HOME: temp, USERPROFILE: temp, XDG_CONFIG_HOME: path.join(temp, 'xdg') } });
+  await mkdir(path.join(temp, '.claude'), { recursive: true });
+  await mkdir(path.join(temp, '.codex'), { recursive: true });
+  await writeFile(path.join(temp, '.claude', 'settings.json'), '{}\n');
+  await writeFile(path.join(temp, '.codex', 'config.toml'), '\n');
+  const smokeEnv = { ...env, HOME: temp, USERPROFILE: temp, APPDATA: path.join(temp, 'appdata'), XDG_CONFIG_HOME: path.join(temp, 'xdg') };
+  execFileSync(process.execPath, [cli, 'init', '--local', '--yes', '--dry-run', '--cwd', disposableProject], { cwd: disposableProject, stdio: 'ignore', env: smokeEnv });
   if ((await readdir(disposableProject)).length !== 1) throw new Error('Packaged local dry-run wrote files into the disposable project.');
   process.stdout.write(`Packaged CLI smoke test passed (${version}).\n`);
 } finally {

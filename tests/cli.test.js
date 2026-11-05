@@ -34,6 +34,7 @@ async function fixture(t, runtimes = false) {
     ...process.env,
     HOME: home,
     USERPROFILE: home,
+    APPDATA: path.join(root, 'appdata'),
     XDG_CONFIG_HOME: path.join(root, 'xdg'),
     PATH: runtimes && process.platform !== 'win32' ? bin : '',
     EDITOR: '',
@@ -42,6 +43,11 @@ async function fixture(t, runtimes = false) {
   const run = (...args) => spawnSync(process.execPath, [cli, ...args, '--cwd', project], { cwd: project, env, encoding: 'utf8' });
   t.after(async () => rm(root, { recursive: true, force: true }));
   return { root, home, project, bin, env, run };
+}
+
+function globalConfigPath(fx) {
+  const configHome = process.platform === 'win32' ? fx.env.APPDATA : fx.env.XDG_CONFIG_HOME;
+  return path.join(configHome, 'tiersplice', 'config.json');
 }
 
 test('non-interactive init requires explicit scope and confirmation', async (t) => {
@@ -144,7 +150,7 @@ test('unsupported or malformed configuration is reported rather than repaired si
 
 test('corrupt inherited global config blocks local policy mutations and is reported with its path', async (t) => {
   const fx = await fixture(t);
-  const globalConfig = path.join(fx.root, 'xdg', 'tiersplice', 'config.json');
+  const globalConfig = globalConfigPath(fx);
   await mkdir(path.dirname(globalConfig), { recursive: true });
   await writeFile(globalConfig, '{bad json');
   const localPath = path.join(fx.project, '.tiersplice.json');
@@ -213,7 +219,7 @@ test('local profile changes do not modify global TierSplice configuration', asyn
   const fx = await fixture(t, true);
   const globalInit = fx.run('init', '--global', '--profile', 'balanced', '--yes');
   assert.equal(globalInit.status, 0, globalInit.stderr);
-  const globalConfig = path.join(fx.root, 'xdg', 'tiersplice', 'config.json');
+  const globalConfig = globalConfigPath(fx);
   const localInit = fx.run('init', '--local', '--profile', 'quality', '--yes');
   assert.equal(localInit.status, 0, localInit.stderr);
   const localProfile = fx.run('profile', 'economy', '--local');
