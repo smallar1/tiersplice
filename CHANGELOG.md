@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0-beta.0 — Installation upgrades and model tracking (implementation in progress)
+
+- Add `upgrade --global|--local` with a read-only dry run, managed-file preflight, rollback, setup-version metadata, and explicit missing-install and future-version diagnostics.
+- Preserve existing valid profile, routing, role, effort, and delegation preferences during setup upgrades. Existing explicit model overrides are treated as pinned unless they carry a tracking policy.
+- Add `models list`, `models status`, and `models refresh`, including offline cache inspection and dry runs that use cached data only.
+- Add a bounded Codex app-server `model/list` adapter, validated per-user catalog cache, and conservative updates only for native-recommended models with known same-family compatibility and supported reasoning effort.
+- Keep Claude's built-in family aliases native-resolved; do not claim a concrete model generation. No session-start hook or background service is enabled.
+- Documentation, regression coverage, cross-platform CI, and live native-host verification are in progress; this beta is not release-cleared.
+
 ## 0.3.0-beta.0 — Automatic delegation beta (unpublished)
 
 - Install concise, profile-agnostic Claude Code and Codex parent routing guidance with `init` and `sync`, while retaining all six configured native agents.

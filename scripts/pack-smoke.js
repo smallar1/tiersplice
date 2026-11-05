@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,7 +22,7 @@ try {
   if (jsonStart < 0) throw new Error(`npm pack did not return its JSON manifest: ${packOutput}`);
   const packReport = JSON.parse(packOutput.slice(jsonStart + 1));
   const shipped = new Set(packReport[0].files.map(({ path: file }) => file));
-  const expected = ['CHANGELOG.md', 'IMPLEMENTATION_STATUS.md', 'LICENSE', 'README.md', 'RELEASE_AUDIT_v0.2.1.md', 'docs/automatic-delegation.md', 'docs/resolve.md', 'package.json', 'schemas/config.schema.json', 'schemas/resolve.schema.json', 'src/adapters.js', 'src/cli.js', 'src/config.js', 'src/filesystem.js'];
+  const expected = ['CHANGELOG.md', 'IMPLEMENTATION_STATUS.md', 'LICENSE', 'README.md', 'RELEASE_AUDIT_v0.2.1.md', 'docs/MODEL_UPDATES.md', 'docs/PUBLISHING.md', 'docs/UPGRADING.md', 'docs/automatic-delegation.md', 'docs/resolve.md', 'package.json', 'schemas/config.schema.json', 'schemas/resolve.schema.json', 'src/adapters.js', 'src/cli.js', 'src/config.js', 'src/filesystem.js', 'src/models.js'];
   if (shipped.size !== expected.length || expected.some((file) => !shipped.has(file))) throw new Error(`Unexpected package contents: ${[...shipped].sort().join(', ')}`);
   const tarballName = (await readdir(tarballs)).find((name) => name.endsWith('.tgz'));
   if (!tarballName) throw new Error('npm pack did not create a tarball.');
@@ -49,8 +49,17 @@ try {
   await writeFile(path.join(temp, '.claude', 'settings.json'), '{}\n');
   await writeFile(path.join(temp, '.codex', 'config.toml'), '\n');
   const smokeEnv = { ...env, HOME: temp, USERPROFILE: temp, APPDATA: path.join(temp, 'appdata'), XDG_CONFIG_HOME: path.join(temp, 'xdg') };
-  execFileSync(process.execPath, [cli, 'init', '--local', '--yes', '--dry-run', '--cwd', disposableProject], { cwd: disposableProject, stdio: 'ignore', env: smokeEnv });
-  if ((await readdir(disposableProject)).length !== 1) throw new Error('Packaged local dry-run wrote files into the disposable project.');
+  execFileSync(process.execPath, [cli, 'init', '--local', '--yes', '--cwd', disposableProject], { cwd: disposableProject, stdio: 'ignore', env: smokeEnv });
+  const manifestPath = path.join(disposableProject, '.tiersplice-manifest.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  delete manifest.setupVersion;
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  const upgrade = execFileSync(process.execPath, [cli, 'upgrade', '--local', '--dry-run', '--json', '--cwd', disposableProject], { cwd: disposableProject, encoding: 'utf8', env: smokeEnv });
+  if (JSON.parse(upgrade).sourceVersion.version !== '0.3.0-beta.0') throw new Error('Packaged CLI did not recognize a v0.3 setup.');
+  const modelStatus = execFileSync(process.execPath, [cli, 'models', 'status', '--local', '--json', '--cwd', disposableProject], { cwd: disposableProject, encoding: 'utf8', env: smokeEnv });
+  if (!Array.isArray(JSON.parse(modelStatus).assignments)) throw new Error('Packaged CLI models status response is invalid.');
+  const refresh = spawnSync(process.execPath, [cli, 'models', 'refresh', '--local', '--offline', '--dry-run', '--json', '--cwd', disposableProject], { cwd: disposableProject, encoding: 'utf8', env: smokeEnv });
+  if (![0, 1].includes(refresh.status) || !JSON.parse(refresh.stdout).skipped) throw new Error(`Packaged model refresh failed: ${refresh.stderr || refresh.stdout}`);
   process.stdout.write(`Packaged CLI smoke test passed (${version}).\n`);
 } finally {
   await rm(temp, { recursive: true, force: true });

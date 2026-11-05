@@ -6,7 +6,7 @@ TierSplice is an open-source, installable CLI that helps existing coding tools s
 
 Instead of replacing your agents, TierSplice gives them a shared, configurable model-tier policy.
 
-> **Project status: `0.3.0-beta.0` beta candidate.** Automatic routing guidance and managed instruction blocks are implemented; native automatic agent invocation has not been verified. This prerelease is opt-in and is not promoted to npm `latest`. See [IMPLEMENTATION_STATUS.md](./IMPLEMENTATION_STATUS.md) for evidence and [docs/PUBLISHING.md](./docs/PUBLISHING.md) for the manual release procedure.
+> **Project status: `0.4.0-beta.0` implementation in progress.** Setup upgrades and opt-in model refresh are being added. Live runtime discovery and invocation remain unverified. See [IMPLEMENTATION_STATUS.md](./IMPLEMENTATION_STATUS.md) for current evidence.
 
 ## What TierSplice does
 
@@ -36,9 +36,21 @@ npx tiersplice@beta init --local
 
 # Non-interactive example
 npx tiersplice@beta init --global --profile balanced --yes
+
+# Upgrade an existing setup after obtaining the newer CLI
+npx tiersplice@beta upgrade --global --dry-run
+npx tiersplice@beta upgrade --global
+
+# Inspect or explicitly refresh supported native model catalogs
+tiersplice models list --runtime codex
+tiersplice models status --global
+tiersplice models refresh --global --dry-run
+tiersplice models refresh --global
 ```
 
 Global setup configures native user-level agents and concise routing guidance. Local setup writes only to the current project and its supported local configuration. Global setup does not rewrite every existing repository. Setup still asks only for scope and profile.
+
+Installing a newer npm package updates the CLI, not an existing setup. Run `tiersplice upgrade --global` or `--local` to refresh managed files in place. `npx tiersplice@beta upgrade` uses that package version for the command; it does not permanently update a separately installed global CLI. See [docs/UPGRADING.md](./docs/UPGRADING.md).
 
 **Prerequisites:** Node.js 20.11+. Claude Code or Codex is needed to generate native agents; with neither detected, TierSplice still saves its policy and reports that routing is inactive.
 
@@ -52,7 +64,7 @@ Global setup configures native user-level agents and concise routing guidance. L
 
 The **Balanced** policy favors **Haiku / Sonnet / Opus** for Claude Code's light / standard / heavy tiers and **gpt-6-luna / gpt-6-luna / gpt-6-sol** for Codex. These are configured preferences; TierSplice does not verify that the installed runtime or account can use them.
 
-Model and effort settings can be overridden in the JSON configuration. Claude agent files pin the selected model and leave effort advisory. Codex files set the selected model and requested effort where the renderer supports it; actual model access and invocation remain unverified.
+Model and effort settings can be overridden in the JSON configuration. Built-in Claude model families use native aliases (`haiku`, `sonnet`, `opus`) so Claude Code can resolve its current generation. Explicit model IDs remain pinned. Codex refresh is available only when the installed native app-server returns a validated catalog with an explicit same-family recommendation and compatible effort; catalog visibility does not prove account entitlement or successful execution. See [docs/MODEL_UPDATES.md](./docs/MODEL_UPDATES.md).
 
 ## Configuration and commands
 
@@ -67,6 +79,7 @@ npx tiersplice@beta profile quality --local
 npx tiersplice@beta status
 npx tiersplice@beta doctor
 npx tiersplice@beta resolve --runtime codex --role implementation --json
+npx tiersplice@beta models status --global
 
 # Open the configuration file
 npx tiersplice@beta config edit
@@ -109,13 +122,14 @@ Third-party workflow tools retain their own planning and delegation. `resolve` r
 
 TierSplice does **not** change the parent model, bypass Claude Code or Codex subscription limits, guarantee usage savings, or silently switch to paid API providers. Child model pins do not make parent model usage free; additional agents can add latency and usage.
 
-## Feature roadmap
+## Feature status
 
 | Target | Features | Status |
 | --- | --- | --- |
 | **v0.1** | CLI, global/local setup, profiles, Claude/Codex agents, configuration, status/doctor, sync/uninstall | Implemented |
 | **v0.2** | Debugger agent, policy resolution API, framework-neutral operation | Implemented; native host invocation unverified |
 | **v0.3** | Automatic native delegation guidance, agent descriptions, and safe managed instruction blocks | Implemented; live host verification outstanding |
+| **v0.4** | Setup upgrades, native model catalog refresh, tracking policy, and compatibility diagnostics | Beta implementation; see [IMPLEMENTATION_STATUS.md](./IMPLEMENTATION_STATUS.md) |
 | **Later** | Explicit Claude Code ↔ Codex task handoffs and quota-aware failover | Deferred / exploratory |
 
 Optional external framework adapters may be considered later if users request them; they are not part of v0.2.

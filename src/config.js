@@ -20,7 +20,7 @@ export const DEFAULT_ROLES = {
 
 export function validateConfig(value, file = 'config') {
   const errors = [];
-  const known = new Set(['schemaVersion', 'profile', 'models', 'roles', 'escalation', 'delegation']);
+  const known = new Set(['schemaVersion', 'profile', 'models', 'roles', 'escalation', 'delegation', 'modelUpdates']);
   if (!value || typeof value !== 'object' || Array.isArray(value)) return [`${file}: expected a JSON object`];
   for (const key of Object.keys(value)) if (!known.has(key)) errors.push(`${file}.${key}: unknown property`);
   if (value.schemaVersion !== 1) errors.push(`${file}.schemaVersion: expected 1`);
@@ -34,9 +34,12 @@ export function validateConfig(value, file = 'config') {
         for (const [tier, route] of Object.entries(tiers)) {
           if (!['light', 'standard', 'heavy'].includes(tier)) { errors.push(`${file}.models.${runtime}.${tier}: unknown tier`); continue; }
           if (!route || typeof route !== 'object' || Array.isArray(route)) { errors.push(`${file}.models.${runtime}.${tier}: expected an object`); continue; }
-          for (const key of Object.keys(route)) if (!['model', 'effort'].includes(key)) errors.push(`${file}.models.${runtime}.${tier}.${key}: unknown property`);
+          for (const key of Object.keys(route)) if (!['model', 'effort', 'tracking', 'family'].includes(key)) errors.push(`${file}.models.${runtime}.${tier}.${key}: unknown property`);
           if (route.model !== undefined && (typeof route.model !== 'string' || !route.model.trim() || /[\x00-\x1f\x7f]/.test(route.model))) errors.push(`${file}.models.${runtime}.${tier}.model: expected a non-empty string without control characters`);
           if (route.effort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(route.effort)) errors.push(`${file}.models.${runtime}.${tier}.effort: expected low, medium, high, xhigh, or max`);
+          if (route.tracking !== undefined && !['native-alias', 'latest-compatible', 'pinned'].includes(route.tracking)) errors.push(`${file}.models.${runtime}.${tier}.tracking: expected native-alias, latest-compatible, or pinned`);
+          if (route.family !== undefined && (typeof route.family !== 'string' || !/^[a-zA-Z0-9._-]{1,80}$/.test(route.family))) errors.push(`${file}.models.${runtime}.${tier}.family: expected a short model family identifier`);
+          if (route.tracking === 'pinned' && !route.model) errors.push(`${file}.models.${runtime}.${tier}: a pinned assignment requires a concrete model`);
         }
       }
     }
@@ -60,6 +63,16 @@ export function validateConfig(value, file = 'config') {
     else {
       for (const key of Object.keys(delegation)) if (key !== 'automatic') errors.push(`${file}.delegation.${key}: unknown property`);
       if (delegation.automatic !== undefined && typeof delegation.automatic !== 'boolean') errors.push(`${file}.delegation.automatic: expected a boolean`);
+    }
+  }
+  if (value.modelUpdates !== undefined) {
+    const updates = value.modelUpdates;
+    if (!updates || typeof updates !== 'object' || Array.isArray(updates)) errors.push(`${file}.modelUpdates: expected an object`);
+    else {
+      for (const key of Object.keys(updates)) if (!['enabled', 'checkIntervalHours', 'startupRefresh'].includes(key)) errors.push(`${file}.modelUpdates.${key}: unknown property`);
+      if (updates.enabled !== undefined && typeof updates.enabled !== 'boolean') errors.push(`${file}.modelUpdates.enabled: expected a boolean`);
+      if (updates.startupRefresh !== undefined && typeof updates.startupRefresh !== 'boolean') errors.push(`${file}.modelUpdates.startupRefresh: expected a boolean`);
+      if (updates.checkIntervalHours !== undefined && (!Number.isFinite(updates.checkIntervalHours) || updates.checkIntervalHours < 0 || updates.checkIntervalHours > 8760)) errors.push(`${file}.modelUpdates.checkIntervalHours: expected a number between 0 and 8760`);
     }
   }
   return errors;

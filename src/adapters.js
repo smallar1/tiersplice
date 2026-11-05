@@ -1,6 +1,7 @@
 import { access } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
+import { constants as fsConstants } from 'node:fs';
 
 const runVersion = (command) => {
   const result = spawnSync(command, ['--version'], { encoding: 'utf8', timeout: 1500, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -10,14 +11,26 @@ const runVersion = (command) => {
 
 async function exists(file) { try { await access(file); return true; } catch { return false; } }
 
-export async function detectRuntimes(paths) {
+async function executableOnPath(command) {
+  const extensions = process.platform === 'win32' ? (process.env.PATHEXT || '.EXE;.CMD;.BAT').split(';') : [''];
+  const accessMode = process.platform === 'win32' ? undefined : fsConstants.X_OK;
+  for (const directory of (process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
+    for (const extension of extensions) {
+      const candidate = path.join(directory, `${command}${extension}`);
+      try { await access(candidate, accessMode); return true; } catch {}
+    }
+  }
+  return false;
+}
+
+export async function detectRuntimes(paths, { probeVersions = true } = {}) {
   const home = process.platform === 'win32' ? process.env.USERPROFILE || '' : process.env.HOME || '';
   const claudeHome = path.resolve(process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'));
   const codexHome = path.resolve(process.env.CODEX_HOME || path.join(home, '.codex'));
-  const claudeVersion = runVersion('claude');
-  const codexVersion = runVersion('codex');
-  const claude = claudeVersion || await exists(path.join(claudeHome, 'settings.json')) || await exists(paths.claudeAgents);
-  const codex = codexVersion || await exists(path.join(codexHome, 'config.toml')) || await exists(paths.codexAgents);
+  const claudeVersion = probeVersions ? runVersion('claude') : null;
+  const codexVersion = probeVersions ? runVersion('codex') : null;
+  const claude = claudeVersion || (probeVersions && await exists(path.join(claudeHome, 'settings.json'))) || (probeVersions && await exists(paths.claudeAgents)) || (!probeVersions && await executableOnPath('claude'));
+  const codex = codexVersion || (probeVersions && await exists(path.join(codexHome, 'config.toml'))) || (probeVersions && await exists(paths.codexAgents)) || (!probeVersions && await executableOnPath('codex'));
   return {
     claude: { id: 'claude', status: claude ? 'detected' : 'not found', version: typeof claude === 'string' ? claude : claudeVersion, modelAccess: 'unverified' },
     codex: { id: 'codex', status: codex ? 'detected' : 'not found', version: typeof codex === 'string' ? codex : codexVersion, modelAccess: 'unverified' }
