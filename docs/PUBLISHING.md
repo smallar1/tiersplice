@@ -4,8 +4,8 @@ Publishing, tagging, merging, and changing npm dist-tags are operator actions. T
 
 ## Prepare a beta
 
-1. Complete the implementation and release audit on `feature/v0.4-upgrades-model-tracking`. Do not release from an unreviewed branch.
-2. Synchronize `package.json`, `package-lock.json`, CLI version output, `CHANGELOG.md`, and implementation evidence. Use an opt-in prerelease such as `0.4.0-beta.0` and the npm `beta` tag.
+1. Complete the implementation and release audit on the reviewed feature branch based on current `main`. Do not release from an unreviewed branch.
+2. Synchronize `package.json`, any lockfile, CLI version output, `CHANGELOG.md`, implementation evidence, and the host-capability claims in README and automatic-delegation documentation. Use an opt-in prerelease such as `0.5.0-beta.0` and the npm `beta` tag.
 3. Confirm the npm package name and registry with `npm view tiersplice version`, `npm config get registry`, and the intended npm account. Do not publish if the name, owner, or registry is unexpected.
 4. In a clean checkout, run `npm ci`, `npm run check`, `npm test`, `npm run smoke:pack`, `npm audit`, `npm audit --omit=dev`, `npm pack --dry-run --json`, and `npm publish --dry-run --tag beta --access public` where supported. Record exact commands, results, platform, and commit in the release audit.
 5. Inspect the package tarball. Confirm new source modules, schemas, and every intended user document are included by the explicit `package.json` `files` allowlist. Confirm no fixtures, caches, credentials, or unrelated workspace files are present.
