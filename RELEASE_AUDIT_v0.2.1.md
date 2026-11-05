@@ -18,7 +18,7 @@
 | fixed | npm file shipping was implicit and had no content assertion | `files` allowlist retained and pack smoke now asserts the complete expected file set |
 | fixed | Local secrets and machine ownership manifest lacked ignore guidance | Added minimal `.gitignore`; `.tiersplice.json` is intentionally not ignored |
 | fixed | No operator beta publishing procedure | Added `docs/PUBLISHING.md` with manual beta-only flow and recovery guidance |
-| fixed | Cross-platform CI failed in tests and package smoke | Windows tests expected XDG paths instead of the Windows `%APPDATA%` path; smoke dry-run returned the CLI's warning exit when no host runtimes were installed. Fixtures now isolate `%APPDATA%` and seed synthetic runtime markers. Local checks pass; GitHub rerun is pending. |
+| fixed | Cross-platform CI failed in tests and package smoke | Windows tests expected XDG paths instead of the Windows `%APPDATA%` path; smoke dry-run returned the CLI's warning exit when no host runtimes were installed. Fixtures now isolate `%APPDATA%` and seed synthetic runtime markers. GitHub run `41941489250` passed all six matrix jobs on commit `72ed76956188040ec55fe79fc0e27e4b210b34cc`. |
 | warning | Remote-only history from other branches was not audited | Gitleaks scanned local history and the working tree; the release commit staged only the intended 13 files, but no remote fetch was run |
 | warning | Native runtime execution and real model access are unverified | No authenticated or paid runtime tests were performed |
 | warning | Concurrent symlink swaps and rollback failure are not fully assessed | Existing tests cover common path/rollback cases; hostile concurrency and rollback-failure matrix remains incomplete |
@@ -41,14 +41,15 @@ Expected npm files (verified exactly): `CHANGELOG.md`, `IMPLEMENTATION_STATUS.md
 
 ## GitHub CI failure diagnosis
 
-The initial workflow attempts for commit `30c9b49ba98f0905f11a2fc76d691792c774a1aa` failed in two independent places: Windows tests used an expected global config path under XDG even though Windows resolves global config under `%APPDATA%`; all-platform pack smoke ran local init without a detected Claude/Codex runtime, so its warning exit code caused the smoke command to fail. The Ubuntu Node 20 job was cancelled by matrix fail-fast after other jobs failed. Regression fixes are in the follow-up commit; the new GitHub matrix result must be checked before publication.
+The initial workflow attempts for commit `30c9b49ba98f0905f11a2fc76d691792c774a1aa` failed in two independent places: Windows tests used an expected global config path under XDG even though Windows resolves global config under `%APPDATA%`; all-platform pack smoke ran local init without a detected Claude/Codex runtime, so its warning exit code caused the smoke command to fail. The Ubuntu Node 20 job was cancelled by matrix fail-fast after other jobs failed. Regression fixes were pushed and the complete matrix then passed.
 
 - Failed push run: [41940928391](https://github.com/smallar1/tiersplice/actions/runs/41940928391).
 - Failed pull-request run: [41940955807](https://github.com/smallar1/tiersplice/actions/runs/41940955807).
+- Passing follow-up matrix: [41941489250](https://github.com/smallar1/tiersplice/actions/runs/41941489250), all six jobs successful.
 
 ## Required remaining gates
 
 - Run all local checks after the final changes and inspect actual packed file list.
 - Obtain a writable checkout on the intended feature branch; fetch and verify origin baseline; run history-aware secret scanning and inspect intended push scope.
-- Confirm the new supported OS/Node CI matrix run passes, and review the exact tarball plus `npm publish --dry-run --tag beta --access public`.
+- Review the exact tarball and run `npm publish --dry-run --tag beta --access public` on the publishing machine.
 - Maintainer approval is required before any merge or publication. Use `npx tiersplice@beta init --local --dry-run` as the first real-repository trial.
