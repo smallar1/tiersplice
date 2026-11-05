@@ -29,8 +29,8 @@ export async function detectRuntimes(paths, { probeVersions = true } = {}) {
   const codexHome = path.resolve(process.env.CODEX_HOME || path.join(home, '.codex'));
   const claudeVersion = probeVersions ? runVersion('claude') : null;
   const codexVersion = probeVersions ? runVersion('codex') : null;
-  const claude = claudeVersion || (probeVersions && await exists(path.join(claudeHome, 'settings.json'))) || (probeVersions && await exists(paths.claudeAgents)) || (!probeVersions && await executableOnPath('claude'));
-  const codex = codexVersion || (probeVersions && await exists(path.join(codexHome, 'config.toml'))) || (probeVersions && await exists(paths.codexAgents)) || (!probeVersions && await executableOnPath('codex'));
+  const claude = claudeVersion || await exists(path.join(claudeHome, 'settings.json')) || await exists(paths.claudeAgents) || await executableOnPath('claude');
+  const codex = codexVersion || await exists(path.join(codexHome, 'config.toml')) || await exists(paths.codexAgents) || await executableOnPath('codex');
   return {
     claude: { id: 'claude', status: claude ? 'detected' : 'not found', version: typeof claude === 'string' ? claude : claudeVersion, modelAccess: 'unverified' },
     codex: { id: 'codex', status: codex ? 'detected' : 'not found', version: typeof codex === 'string' ? codex : codexVersion, modelAccess: 'unverified' }
