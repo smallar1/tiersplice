@@ -10,7 +10,7 @@ import { detectRuntimes, renderClaude, renderCodex } from './adapters.js';
 import { PROFILES, readConfig, resolvePolicy, validateConfig } from './config.js';
 import { applyManaged, atomicWrite, hash, readManifest, resolvePaths, uninstallOwned } from './filesystem.js';
 
-const VERSION = '0.2.0';
+const { version: VERSION } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const EXIT = { ok: 0, warning: 1, error: 2 };
 
 function parseArgs(argv) {

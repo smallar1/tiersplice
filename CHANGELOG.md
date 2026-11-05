@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1-beta.0 — Beta candidate (unpublished)
+
+- Prepare an opt-in npm beta with synchronized package and CLI versions and an explicit npm file allowlist.
+- Add tarball content assertions, a disposable package smoke check, and operator publishing instructions.
+- Fix Windows test isolation for `%APPDATA%` and make the packaged dry-run independent of installed host runtimes.
+- Refresh beta installation guidance and document audit evidence and limitations in `RELEASE_AUDIT_v0.2.1.md`.
+- Verification is local only; GitHub CI, native host invocation, and publication have not been verified.
+
 ## 0.2.0 — Unreleased
 
 - Accept valid manual edits to TierSplice configuration during profile changes and sync; validate both global and local sources.
