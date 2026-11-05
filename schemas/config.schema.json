@@ -33,6 +33,15 @@
       "properties": {
         "automatic": { "type": "boolean" }
       }
+    },
+    "modelUpdates": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "checkIntervalHours": { "type": "number", "minimum": 0, "maximum": 8760 },
+        "startupRefresh": { "type": "boolean" }
+      }
     }
   },
   "$defs": {
@@ -48,9 +57,17 @@
     "route": {
       "type": "object",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "tracking": { "const": "pinned" } }, "required": ["tracking"] },
+          "then": { "required": ["model"] }
+        }
+      ],
       "properties": {
         "model": { "type": "string", "minLength": 1 },
-        "effort": { "enum": ["low", "medium", "high", "xhigh", "max"] }
+        "effort": { "enum": ["low", "medium", "high", "xhigh", "max"] },
+        "tracking": { "enum": ["native-alias", "latest-compatible", "pinned"] },
+        "family": { "type": "string", "pattern": "^[a-zA-Z0-9._-]{1,80}$" }
       }
     }
   }

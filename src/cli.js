@@ -9,13 +9,14 @@ import { stdin, stdout } from 'node:process';
 import { detectRuntimes, renderClaude, renderCodex } from './adapters.js';
 import { PROFILES, readConfig, resolvePolicy, validateConfig } from './config.js';
 import { applyInstructionBlocks, applyManaged, assertNoSymlinkPath, atomicWrite, hash, inspectInstructionBlock, listOwned, readManifest, resolvePaths, uninstallOwned } from './filesystem.js';
+import { discoverModels, planModelRefresh, readCatalog } from './models.js';
 
 const { version: VERSION } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const EXIT = { ok: 0, warning: 1, error: 2 };
 
 function parseArgs(argv) {
   const positionals = [];
-  const options = { yes: false, json: false, dryRun: false, autoDelegation: null };
+  const options = { yes: false, json: false, dryRun: false, offline: false, autoDelegation: null };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--') { positionals.push(...argv.slice(i + 1)); break; }
@@ -24,6 +25,7 @@ function parseArgs(argv) {
     else if (arg === '--yes' || arg === '-y') options.yes = true;
     else if (arg === '--json') options.json = true;
     else if (arg === '--dry-run') options.dryRun = true;
+    else if (arg === '--offline') options.offline = true;
     else if (arg === '--no-auto-delegation') options.autoDelegation = false;
     else if (arg === '--auto-delegation') options.autoDelegation = true;
     else if (arg === '--help' || arg === '-h') options.help = true;
@@ -140,6 +142,33 @@ function isKnownManagedPath(paths, file) {
   return instructions.some((candidate) => path.resolve(candidate) === target);
 }
 
+async function validateUpgradeManifestScope(paths, manifest) {
+  const issues = [];
+  const instructions = new Set([paths.claudeInstructions, paths.codexInstructions]);
+  if (path.basename(paths.manifest) === '.tiersplice-manifest.json') {
+    for (const file of [path.join(paths.root, '.claude', 'CLAUDE.md'), path.join(paths.root, '.codex', 'AGENTS.md'), path.join(paths.root, 'CLAUDE.md'), path.join(paths.root, 'AGENTS.md')]) instructions.add(file);
+  }
+  for (const [file, record] of Object.entries(manifest.files)) {
+    const isConfig = file === paths.config && ['config', 'source-config', undefined].includes(record.kind);
+    const isAgent = [paths.claudeAgents, paths.codexAgents].some((root) => path.dirname(file) === path.resolve(root))
+      && /^tiersplice-[a-z0-9_-]+\.(md|toml)$/.test(path.basename(file))
+      && ['generated-output', 'native-agent', undefined].includes(record.kind);
+    const isInstruction = instructions.has(file) && record.kind === 'instruction-block';
+    if (!isConfig && !isAgent && !isInstruction) {
+      issues.push(`${file}: ownership manifest entry is outside the selected ${path.basename(paths.manifest) === 'manifest.json' ? 'global' : 'local'} TierSplice allowlist`);
+      continue;
+    }
+    const base = isAgent ? [paths.claudeAgents, paths.codexAgents].find((root) => path.dirname(file) === path.resolve(root)) : paths.root;
+    const globalInstruction = path.basename(paths.manifest) === 'manifest.json' && isInstruction;
+    const boundary = globalInstruction ? path.dirname(file) : isAgent && path.basename(base) === 'agents' && ['.claude', '.codex'].includes(path.basename(path.dirname(base))) ? path.dirname(path.dirname(base)) : paths.root;
+    try {
+      await assertNoSymlinkPath(path.dirname(file), boundary);
+      if ((await lstat(file)).isSymbolicLink()) issues.push(`${file}: ownership manifest target is a symlink`);
+    } catch (error) { if (error.code !== 'ENOENT') issues.push(`${file}: ${error.message}`); }
+  }
+  return issues;
+}
+
 function printRoutes(policy, runtimes) {
   for (const runtime of ['claude', 'codex']) {
     const detected = runtimes[runtime];
@@ -164,8 +193,9 @@ async function createInitialConfig(file, manifestPath, profile, dryRun, automati
     const manifest = await readManifest(manifestPath);
     if (manifest.files[file]) {
       manifest.files[file].kind = 'config';
-      await atomicWrite(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { boundary: path.dirname(manifestPath) });
     }
+    manifest.setupVersion = VERSION;
+    await atomicWrite(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { boundary: path.dirname(manifestPath) });
   }
   return { created: !dryRun, planned: true, exists: false, content };
 }
@@ -281,6 +311,11 @@ async function buildStatus(scope, cwd) {
   const runtimePaths = scope === 'global' ? paths : localPaths;
   const runtimes = await detectRuntimes(runtimePaths);
   const manifest = await readManifest(paths.manifest);
+  const setupVersions = {};
+  for (const [name, file] of [['global', globalPaths.manifest], ['local', localPaths.manifest]]) {
+    try { setupVersions[name] = (await readManifest(file)).setupVersion ?? null; }
+    catch (error) { setupVersions[name] = { error: error.message }; }
+  }
   const files = [];
   for (const [file, record] of Object.entries(manifest.files)) {
     let status = 'missing';
@@ -302,7 +337,18 @@ async function buildStatus(scope, cwd) {
   const automatic = scope === 'global' ? global.value?.delegation?.automatic !== false : (local.value?.delegation?.automatic ?? global.value?.delegation?.automatic ?? true);
   const instructionFiles = files.filter((file) => file.type === 'instruction-block');
   const autoSource = scope === 'global' ? (global.value?.delegation?.automatic === undefined ? 'default:on' : 'global:delegation') : (local.value?.delegation?.automatic !== undefined ? 'local:delegation' : global.value?.delegation?.automatic !== undefined ? 'global:delegation' : 'default:on');
-  return { schemaVersion: 1, version: VERSION, scope, config: { global: globalPaths.config, local: localPaths.config, globalProfile: global.value?.profile ?? null, localProfile: local.value?.profile ?? null, effectiveProfile: policy.profile, profileSource: local.value?.profile ? 'local:profile' : global.value?.profile ? 'global:profile' : 'built-in' }, routes: policy.routes, roles: policy.roles, runtimes, autoDelegation: { configured: automatic ? 'enabled' : 'disabled', source: autoSource, installed: instructionFiles.length > 0 && instructionFiles.every((file) => file.status === 'instruction-block-installed'), observed: 'unverified', instructions: instructionFiles, globalPolicy: global.value?.delegation?.automatic === false ? 'disabled' : 'enabled', localOverrideLimit: scope === 'local' && local.value?.delegation?.automatic === false && global.value?.delegation?.automatic !== false ? 'project guidance is advisory and cannot reliably undo already-loaded global guidance' : null }, managedFiles: files };
+  let setupUpdateAvailable = false;
+  let setupIncompatible = false;
+  let setupMetadataError = null;
+  const selectedConfig = scope === 'global' ? global.value : local.value;
+  if (manifest.setupVersion !== undefined) {
+    try {
+      const relation = compareVersions(manifest.setupVersion, VERSION);
+      setupUpdateAvailable = relation < 0;
+      setupIncompatible = relation > 0;
+    } catch (error) { setupMetadataError = error.message; }
+  } else setupUpdateAvailable = Boolean(selectedConfig);
+  return { schemaVersion: 1, version: VERSION, scope, setupVersion: manifest.setupVersion ?? null, setupVersions: { cli: VERSION, ...setupVersions }, setupUpdateAvailable, setupIncompatible, setupMetadataError, config: { global: globalPaths.config, local: localPaths.config, globalProfile: global.value?.profile ?? null, localProfile: local.value?.profile ?? null, effectiveProfile: policy.profile, profileSource: local.value?.profile ? 'local:profile' : global.value?.profile ? 'global:profile' : 'built-in' }, routes: policy.routes, roles: policy.roles, runtimes, autoDelegation: { configured: automatic ? 'enabled' : 'disabled', source: autoSource, installed: instructionFiles.length > 0 && instructionFiles.every((file) => file.status === 'instruction-block-installed'), observed: 'unverified', instructions: instructionFiles, globalPolicy: global.value?.delegation?.automatic === false ? 'disabled' : 'enabled', localOverrideLimit: scope === 'local' && local.value?.delegation?.automatic === false && global.value?.delegation?.automatic !== false ? 'project guidance is advisory and cannot reliably undo already-loaded global guidance' : null }, managedFiles: files };
 }
 
 async function commandStatus(options) {
@@ -310,7 +356,7 @@ async function commandStatus(options) {
   const status = await buildStatus(scope, options.cwd);
   if (options.json) outputJson(status);
   else {
-    stdout.write(`TierSplice v${VERSION}\nProfile: ${status.config.effectiveProfile} (${status.config.localProfile ? 'local' : status.config.globalProfile ? 'global' : 'default'})\n`);
+    stdout.write(`TierSplice CLI v${VERSION}; ${status.scope} setup ${status.setupVersion || 'not versioned'}${status.setupUpdateAvailable ? ' (upgrade available)' : ''}\nProfile: ${status.config.effectiveProfile} (${status.config.localProfile ? 'local' : status.config.globalProfile ? 'global' : 'default'})\n`);
     printRoutes({ profile: status.config.effectiveProfile, roles: status.roles, routes: status.routes }, status.runtimes);
     for (const file of status.managedFiles) stdout.write(`Managed file: ${file.status} ${file.path}\n`);
     stdout.write(`Auto-delegation: ${status.autoDelegation.configured}; ${status.autoDelegation.installed ? 'instruction installed' : 'instruction not installed'}; native delegation not verified.\n`);
@@ -335,13 +381,24 @@ async function commandDoctor(options) {
     }
   }
   diagnostics.push({ severity: 'warning', code: status.autoDelegation.configured === 'enabled' ? (status.autoDelegation.installed ? 'AUTO_DELEGATION_UNVERIFIED' : 'AUTO_DELEGATION_NOT_INSTALLED') : 'AUTO_DELEGATION_DISABLED', message: status.autoDelegation.configured === 'enabled' ? (status.autoDelegation.installed ? 'TierSplice routing guidance is installed; native delegation has not been verified.' : 'Automatic delegation is configured but no valid managed routing block is installed.') : 'Automatic TierSplice delegation is disabled at this scope; generated agents remain available.', remediation: 'Start a normal session and inspect native agent invocation evidence; use tiersplice sync to install or refresh guidance.' });
+  if (status.setupUpdateAvailable) diagnostics.push({ severity: 'warning', code: 'SETUP_UPGRADE_AVAILABLE', message: `Installed ${scope} setup version ${status.setupVersion || 'unversioned'} can be upgraded by CLI ${VERSION}.`, remediation: `Review tiersplice upgrade --${scope} --dry-run, then run tiersplice upgrade --${scope}.` });
+  if (status.setupIncompatible) diagnostics.push({ severity: 'error', code: 'SETUP_VERSION_NEWER', message: `Installed ${scope} setup version ${status.setupVersion} is newer than this CLI (${VERSION}).`, remediation: 'Run doctor with a newer TierSplice CLI; do not attempt to upgrade this setup with an older version.' });
+  if (status.setupMetadataError) diagnostics.push({ severity: 'error', code: 'SETUP_VERSION_INVALID', message: status.setupMetadataError, remediation: 'Inspect the ownership manifest and repair its setupVersion metadata before upgrading.' });
+  if (config.value?.modelUpdates?.startupRefresh === true) diagnostics.push({ severity: 'warning', code: 'STARTUP_REFRESH_UNAVAILABLE', message: 'Startup model refresh is enabled in configuration but no verified native lifecycle integration is installed.', remediation: 'Use tiersplice models refresh manually; startup hooks are not supported by this release.' });
+  if (status.runtimes.codex.status === 'detected') {
+    const ttl = config.value?.modelUpdates?.checkIntervalHours ?? inputs.global.value?.modelUpdates?.checkIntervalHours ?? 24;
+    const catalog = await readCatalog('codex', { maxAgeHours: ttl });
+    if (!catalog.catalog) diagnostics.push({ severity: 'warning', code: 'MODEL_CATALOG_UNAVAILABLE', message: 'No validated Codex model catalog is cached; TierSplice has not checked native model availability.', remediation: 'Run tiersplice models list --runtime codex or tiersplice models refresh to request supported native discovery.' });
+    else if (catalog.stale) diagnostics.push({ severity: 'warning', code: 'MODEL_CATALOG_STALE', message: `The cached Codex model catalog from ${catalog.catalog.fetchedAt} is stale.`, remediation: 'Run tiersplice models list --runtime codex to refresh metadata; this does not test inference access.' });
+  }
   if (status.runtimes.claude.status === 'detected') diagnostics.push({ severity: 'warning', code: 'CLAUDE_EFFORT_ADVISORY', message: 'Claude agent model preferences are generated; reasoning effort remains advisory.', remediation: 'Set effort in the native runtime if you require a verified per-agent effort setting.' });
   if (status.runtimes.codex.status === 'detected' && Object.values(status.routes.codex).some((route) => route.effort === 'max')) diagnostics.push({ severity: 'warning', code: 'CODEX_EFFORT_OMITTED', message: 'Codex effort "max" is not emitted because host support has not been verified.', remediation: 'Choose a supported effort level or configure max directly in a compatible Codex release.' });
   for (const file of status.managedFiles) if (file.type === 'instruction-block' ? file.status !== 'instruction-block-installed' : !['config', 'source-config'].includes(file.type) && file.status !== 'synchronized') diagnostics.push({ severity: 'error', code: 'MANAGED_FILE_DRIFT', message: `${file.path} is ${file.status}; sync will refuse to overwrite it.`, remediation: 'Review the TierSplice block and restore or remove it before syncing; TierSplice preserves user instructions.' });
   const code = diagnostics.some((d) => d.severity === 'error') ? EXIT.error : diagnostics.length ? EXIT.warning : EXIT.ok;
-  if (options.json) outputJson({ schemaVersion: 1, version: VERSION, scope, status: code === 0 ? 'ok' : code === 1 ? 'warning' : 'error', diagnostics });
+  if (options.json) outputJson({ schemaVersion: 1, version: VERSION, scope, setupVersions: status.setupVersions, status: code === 0 ? 'ok' : code === 1 ? 'warning' : 'error', diagnostics });
   else {
     stdout.write(`TierSplice doctor (${scope})\n`);
+    stdout.write(`CLI ${VERSION}; global setup ${typeof status.setupVersions.global === 'string' ? status.setupVersions.global : status.setupVersions.global?.error ? 'invalid manifest' : 'not installed'}; local setup ${typeof status.setupVersions.local === 'string' ? status.setupVersions.local : status.setupVersions.local?.error ? 'invalid manifest' : 'not installed'}.\n`);
     if (!diagnostics.length) stdout.write('No issues found.\n');
     for (const d of diagnostics) stdout.write(`${d.severity.toUpperCase()} ${d.code}: ${d.message}\n`);
   }
@@ -430,6 +487,218 @@ async function commandUninstall(options) {
   return result.conflicts.length ? EXIT.warning : EXIT.ok;
 }
 
+function compareVersions(left, right) {
+  const parse = (value) => /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(value || '');
+  const a = parse(left); const b = parse(right);
+  if (!a || !b) throw new Error(`Cannot compare unsupported setup version: ${left || right}`);
+  for (let i = 1; i <= 3; i += 1) if (Number(a[i]) !== Number(b[i])) return Number(a[i]) - Number(b[i]);
+  if (!a[4] && b[4]) return 1;
+  if (a[4] && !b[4]) return -1;
+  return (a[4] || '').localeCompare(b[4] || '', undefined, { numeric: true });
+}
+
+function inferredSetupVersion(manifest) {
+  if (manifest.setupVersion !== undefined) {
+    if (typeof manifest.setupVersion !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.setupVersion)) throw new Error('Ownership manifest has invalid setupVersion metadata; repair the manifest before upgrading.');
+    return { version: manifest.setupVersion, evidence: 'manifest setupVersion' };
+  }
+  const kinds = new Set(Object.values(manifest.files).map((record) => record.kind));
+  if (kinds.has('instruction-block')) return { version: '0.3.0-beta.0', evidence: 'v0.3 managed instruction block signature' };
+  if (Object.keys(manifest.files).some((file) => /^tiersplice-/.test(path.basename(file)))) return { version: '0.2.0', evidence: 'legacy managed native-agent signature (0.2.x layout)' };
+  if (Object.keys(manifest.files).length) return { version: '0.1.0', evidence: 'legacy config-only manifest layout' };
+  return { version: '0.1.0', evidence: 'legacy config-only layout' };
+}
+
+async function chooseUpgradeScope(options) {
+  const selected = scopeOption(options);
+  if (selected) return selected;
+  if (!stdin.isTTY || !stdout.isTTY) throw new Error('Non-interactive upgrade requires --global or --local.');
+  const rl = createInterface({ input: stdin, output: stdout });
+  try {
+    const answer = (await rl.question('Upgrade scope? Local (recommended) / Global [local]: ')).trim().toLowerCase();
+    return answer === 'global' ? 'global' : 'local';
+  } finally { rl.close(); }
+}
+
+async function commandUpgrade(options) {
+  const scope = await chooseUpgradeScope(options);
+  const paths = await resolvePaths(scope, options.cwd);
+  await assertNoSymlinkPath(path.dirname(paths.config), paths.root);
+  try { if ((await lstat(paths.config)).isSymbolicLink()) throw new Error(`Refusing to upgrade through a symlink configuration file: ${paths.config}`); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const config = await readConfig(paths.config);
+  const manifest = await readManifest(paths.manifest);
+  const manifestConflicts = await validateUpgradeManifestScope(paths, manifest);
+  let manifestPresent = false;
+  try { manifestPresent = (await lstat(paths.manifest)).isFile(); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const summary = { schemaVersion: 1, command: 'upgrade', scope, sourceVersion: null, targetVersion: VERSION, plannedChanges: [], preservedOverrides: [], conflicts: [], requiredManualActions: [], dryRun: options.dryRun };
+  summary.conflicts.push(...manifestConflicts);
+  if (!config.value && !config.errors.length) {
+    if (manifestPresent || Object.keys(manifest.files).length) throw new Error(`The ${scope} ownership manifest exists but its configuration is missing at ${paths.config}; refusing to reinstall over a partial setup. Restore the config or use the documented manual recovery steps.`);
+    summary.requiredManualActions.push(`No ${scope} TierSplice installation was found. Initialize it with: tiersplice init --${scope}`);
+    if (options.json) outputJson(summary); else stdout.write(`${summary.requiredManualActions[0]}\n`);
+    return EXIT.warning;
+  }
+  if (config.errors.length) throw new Error(`Cannot safely upgrade invalid configuration: ${config.errors.join('; ')}`);
+  const setup = inferredSetupVersion(manifest);
+  summary.sourceVersion = { version: setup.version, evidence: setup.evidence };
+  if (summary.conflicts.length) {
+    if (options.json) outputJson(summary); else for (const conflict of summary.conflicts) stdout.write(`Conflict: ${conflict}\n`);
+    return EXIT.warning;
+  }
+  const relation = compareVersions(setup.version, VERSION);
+  if (relation > 0) throw new Error(`Setup version ${setup.version} is newer than this CLI (${VERSION}); install a newer TierSplice CLI. No files were changed.`);
+  if (relation === 0 && manifest.setupVersion === VERSION) {
+    summary.plannedChanges = [];
+    if (options.json) outputJson(summary); else stdout.write(`TierSplice setup (${scope}) is already current at ${VERSION}; no changes needed.\n`);
+    return EXIT.ok;
+  }
+  const inputs = scope === 'global'
+    ? { global: config, local: { value: null, errors: [] }, policy: null }
+    : await readPolicyInputs(paths, options.cwd);
+  const invalid = [...inputs.global.errors, ...inputs.local.errors];
+  if (invalid.length) throw new Error(`Cannot safely upgrade inherited configuration: ${invalid.join('; ')}`);
+  const policy = scope === 'global' ? resolvePolicy(config.value, null) : resolvePolicy(inputs.global.value, config.value);
+  const runtimes = await detectRuntimes(paths, { probeVersions: !options.dryRun });
+  const changes = nativeChanges(paths, policy, runtimes);
+  const automatic = scope === 'global' ? config.value.delegation?.automatic !== false : (config.value.delegation?.automatic ?? inputs.global.value?.delegation?.automatic ?? true);
+  const blocks = instructionChanges(paths, { ...policy, automatic }, runtimes, { scope, localOverridesGlobal: scope === 'local' && config.value.delegation?.automatic === false && Boolean(inputs.global.value && inputs.global.value.delegation?.automatic !== false) });
+  const roots = [paths.root, paths.claudeAgents, paths.codexAgents, path.dirname(paths.claudeInstructions), path.dirname(paths.codexInstructions)];
+  const managedPreflight = await applyManaged(changes, paths.manifest, { dryRun: true, allowedRoots: roots.slice(0, 3) });
+  const blockPreflight = await applyInstructionBlocks(blocks, paths.manifest, { dryRun: true, allowedRoots: roots, allowedInstructionFiles: [paths.claudeInstructions, paths.codexInstructions] });
+  summary.conflicts = [...managedPreflight.conflicts, ...blockPreflight.conflicts];
+  summary.preservedOverrides = Object.entries(config.value.models || {}).flatMap(([runtime, tiers]) => Object.entries(tiers).map(([tier, route]) => ({ runtime, tier, model: route.model ?? null, tracking: route.tracking ?? 'pinned', preserved: true })));
+  summary.plannedChanges = [...managedPreflight.applied, ...blockPreflight.applied].filter((item) => item.action !== 'unchanged');
+  if (manifest.setupVersion !== VERSION) summary.plannedChanges.push({ path: paths.manifest, action: 'record-setup-version', from: manifest.setupVersion ?? setup.version, to: VERSION });
+  if (runtimes.claude.status !== 'detected' || runtimes.codex.status !== 'detected') summary.requiredManualActions.push('A supported runtime was not detected; its native assets were left untouched. Run tiersplice sync after installing the runtime.');
+  summary.modelRefresh = 'not attempted; run tiersplice models refresh explicitly';
+  if (summary.conflicts.length) {
+    if (options.json) outputJson(summary); else for (const conflict of summary.conflicts) stdout.write(`Conflict: ${conflict}\n`);
+    return EXIT.warning;
+  }
+  if (options.dryRun) {
+    if (options.json) outputJson(summary);
+    else { stdout.write(`TierSplice upgrade (${scope})\n  Setup: ${setup.version} -> ${VERSION}\n  Profile: ${config.value.profile} (preserved)\n  Preserved model overrides: ${summary.preservedOverrides.length}\n`); for (const item of summary.plannedChanges) stdout.write(`  ${item.action}: ${item.path}\n`); stdout.write('No files were changed. Model refresh was not attempted.\n'); }
+    return summary.requiredManualActions.length ? EXIT.warning : EXIT.ok;
+  }
+  await withFileRollback([...changes.map((item) => item.path), ...blocks.map((item) => item.path), paths.config], paths.manifest, roots, async () => {
+    const managed = await applyManaged(changes, paths.manifest, { allowedRoots: roots.slice(0, 3) });
+    const appliedBlocks = await applyInstructionBlocks(blocks, paths.manifest, { allowedRoots: roots, allowedInstructionFiles: [paths.claudeInstructions, paths.codexInstructions] });
+    const conflicts = [...managed.conflicts, ...appliedBlocks.conflicts];
+    if (conflicts.length) throw new Error(`Upgrade conflict: ${conflicts.join('; ')}`);
+    const committed = await readManifest(paths.manifest);
+    committed.setupVersion = VERSION;
+    await atomicWrite(paths.manifest, `${JSON.stringify(committed, null, 2)}\n`, { boundary: paths.root });
+  });
+  if (options.json) outputJson(summary);
+  else { stdout.write(`TierSplice setup upgraded (${scope}) from ${setup.version} to ${VERSION}.\n`); for (const item of summary.plannedChanges) stdout.write(`  ${item.action}: ${item.path}\n`); for (const action of summary.requiredManualActions) stdout.write(`Action: ${action}\n`); }
+  return summary.requiredManualActions.length ? EXIT.warning : EXIT.ok;
+}
+
+function effectiveTracking(config, runtime, tier, route) {
+  const explicit = config?.models?.[runtime]?.[tier];
+  if (explicit?.tracking) return explicit.tracking;
+  if (explicit?.model) return 'pinned';
+  return runtime === 'claude' ? 'native-alias' : 'latest-compatible';
+}
+
+async function commandModels(args, options) {
+  const action = args[0];
+  if (!['list', 'status', 'refresh'].includes(action)) throw new Error('models requires list, status, or refresh.');
+  const scope = scopeOption(options) || 'local';
+  const runtimeArg = options.runtime;
+  if (runtimeArg && !['claude', 'codex'].includes(runtimeArg)) throw new Error('--runtime requires claude or codex.');
+  const runtimes = runtimeArg ? [runtimeArg] : ['claude', 'codex'];
+  const paths = await resolvePaths(scope, options.cwd);
+  if (action === 'list') {
+    const result = {};
+    for (const runtime of runtimes) {
+      if (options.offline) result[runtime] = await readCatalog(runtime, { offline: true });
+      else result[runtime] = await discoverModels(runtime);
+    }
+    const response = { schemaVersion: 1, command: 'models list', scope, runtimes: result };
+    if (options.json) outputJson(response);
+    else for (const [runtime, value] of Object.entries(result)) {
+      if (!value.catalog) { stdout.write(`${runtime}: ${value.reason || value.source || 'unavailable'}\n`); continue; }
+      stdout.write(`${runtime}: ${value.catalog.models.length} discovered model(s); source ${value.catalog.source}; fetched ${value.catalog.fetchedAt}\n`);
+      for (const model of value.catalog.models) stdout.write(`  ${model.id} [${model.visibility}; effort ${model.efforts.length ? model.efforts.join(', ') : 'unknown'}]${model.recommendedUpgrade ? `; recommends ${model.recommendedUpgrade}` : ''}\n`);
+    }
+    return Object.values(result).some((item) => !item.catalog) ? EXIT.warning : EXIT.ok;
+  }
+  const inputs = scope === 'global'
+    ? { global: await readConfig(paths.config), local: { value: null, errors: [] }, policy: null }
+    : await readPolicyInputs(paths, options.cwd);
+  const invalid = [...inputs.global.errors, ...inputs.local.errors];
+  if (invalid.length) throw new Error(invalid.join('\n'));
+  const selected = scope === 'global' ? inputs.global.value : inputs.local.value;
+  const policy = scope === 'global' ? resolvePolicy(inputs.global.value, null) : inputs.policy;
+  if (action === 'status') {
+    const cacheTtl = selected?.modelUpdates?.checkIntervalHours ?? (scope === 'local' ? inputs.global.value?.modelUpdates?.checkIntervalHours : undefined) ?? 24;
+    const catalogs = Object.fromEntries(await Promise.all(runtimes.map(async (runtime) => [runtime, await readCatalog(runtime, { maxAgeHours: cacheTtl })])));
+    const assignments = runtimes.flatMap((runtime) => ['light', 'standard', 'heavy'].map((tier) => {
+      const sourceConfig = scope === 'global' ? inputs.global.value : (inputs.local.value?.models?.[runtime]?.[tier] ? inputs.local.value : inputs.global.value);
+      const tracking = effectiveTracking(sourceConfig, runtime, tier, policy.routes[runtime][tier]);
+      return { runtime, tier, model: policy.routes[runtime][tier].model, effort: policy.routes[runtime][tier].effort, tracking, source: sourceConfig?.models?.[runtime]?.[tier] ? `${sourceConfig === inputs.local.value ? 'local' : 'global'}:models` : `profile:${policy.profile}`, pinned: tracking === 'pinned' };
+    }));
+    const enabled = scope === 'global' ? inputs.global.value?.modelUpdates?.enabled !== false : (inputs.local.value?.modelUpdates?.enabled ?? inputs.global.value?.modelUpdates?.enabled ?? true);
+    const response = { schemaVersion: 1, command: 'models status', scope, enabled, catalogs, assignments };
+    if (options.json) outputJson(response); else { for (const item of assignments) stdout.write(`${item.runtime}/${item.tier}: ${item.model} (${item.effort}, ${item.tracking})\n`); for (const [runtime, cache] of Object.entries(catalogs)) stdout.write(`${runtime} catalog: ${cache.catalog ? `${cache.stale ? 'stale' : 'fresh'}; fetched ${cache.catalog.fetchedAt}` : cache.source}\n`); }
+    return EXIT.ok;
+  }
+  if (!selected) throw new Error(`No ${scope} configuration exists. Run tiersplice init --${scope} before refreshing models.`);
+  const cacheTtl = selected.modelUpdates?.checkIntervalHours ?? (scope === 'local' ? inputs.global.value?.modelUpdates?.checkIntervalHours : undefined) ?? 24;
+  const catalogResult = options.offline || options.dryRun
+    ? await readCatalog('codex', { offline: true, maxAgeHours: cacheTtl })
+    : await discoverModels('codex');
+  const catalog = catalogResult.catalog && !catalogResult.stale ? catalogResult.catalog : null;
+  const updatesEnabled = scope === 'global' ? inputs.global.value?.modelUpdates?.enabled !== false : (inputs.local.value?.modelUpdates?.enabled ?? inputs.global.value?.modelUpdates?.enabled ?? true);
+  const plan = catalog ? planModelRefresh(policy, catalog, { globalConfig: inputs.global.value, localConfig: scope === 'global' ? null : inputs.local.value, updatesEnabled }) : { changes: [], skipped: [{ reason: catalogResult.stale && catalogResult.catalog ? 'cached model catalog is stale; refresh it online before applying model changes' : catalogResult.reason || catalogResult.error || 'no validated catalog is available' }] };
+  const response = { schemaVersion: 1, command: 'models refresh', scope, source: catalogResult.source || catalog?.source || (options.offline ? 'cache' : 'native'), fetchedAt: catalog?.fetchedAt ?? null, dryRun: options.dryRun, offline: options.offline, changes: plan.changes, skipped: plan.skipped };
+  if (!plan.changes.length || options.dryRun) {
+    if (options.json) outputJson(response); else { stdout.write(`Model refresh (${scope})${options.dryRun ? ' dry run' : ''}\n`); for (const item of plan.changes) stdout.write(`  ${item.tier}: ${item.from} -> ${item.to} (${item.reason})\n`); for (const item of plan.skipped) stdout.write(`  skipped${item.tier ? ` ${item.tier}` : ''}: ${item.reason}\n`); }
+    return catalog ? (plan.skipped.length && !plan.changes.length ? EXIT.warning : EXIT.ok) : EXIT.warning;
+  }
+  const next = structuredClone(selected);
+  next.models ||= {};
+  next.models.codex ||= {};
+  for (const item of plan.changes) next.models.codex[item.tier] = { ...(next.models.codex[item.tier] || {}), model: item.to, effort: item.effort, tracking: 'latest-compatible', family: item.family };
+  const nextPolicy = scope === 'global' ? resolvePolicy(next, null) : resolvePolicy(inputs.global.value, next);
+  const runtimePaths = scope === 'global' ? paths : paths;
+  const detected = await detectRuntimes(runtimePaths);
+  const native = nativeChanges(paths, nextPolicy, detected);
+  const automatic = scope === 'global' ? next.delegation?.automatic !== false : (next.delegation?.automatic ?? inputs.global.value?.delegation?.automatic ?? true);
+  const blocks = instructionChanges(paths, { ...nextPolicy, automatic }, detected, { scope, localOverridesGlobal: scope === 'local' && next.delegation?.automatic === false && Boolean(inputs.global.value && inputs.global.value.delegation?.automatic !== false) });
+  const roots = [paths.root, paths.claudeAgents, paths.codexAgents, path.dirname(paths.claudeInstructions), path.dirname(paths.codexInstructions)];
+  const preManaged = await applyManaged(native, paths.manifest, { dryRun: true, allowedRoots: roots.slice(0, 3) });
+  const preBlocks = await applyInstructionBlocks(blocks, paths.manifest, { dryRun: true, allowedRoots: roots, allowedInstructionFiles: [paths.claudeInstructions, paths.codexInstructions] });
+  if (preManaged.conflicts.length || preBlocks.conflicts.length) {
+    response.skipped.push(...preManaged.conflicts, ...preBlocks.conflicts);
+    if (options.json) outputJson(response); else for (const conflict of [...preManaged.conflicts, ...preBlocks.conflicts]) stdout.write(`Conflict: ${conflict}\n`);
+    return EXIT.warning;
+  }
+  await withFileRollback([paths.config, ...native.map((item) => item.path), ...blocks.map((item) => item.path)], paths.manifest, roots, async () => {
+    const oldConfig = await readFile(paths.config);
+    const nextConfig = `${JSON.stringify(next, null, 2)}\n`;
+    const manifest = await readManifest(paths.manifest);
+    const previous = manifest.files[paths.config];
+    const userModified = previous?.userModified === true || !previous || hash(oldConfig) !== previous.currentHash;
+    manifest.files[paths.config] = {
+      ...(previous || { created: false, originalHash: hash(oldConfig) }),
+      currentHash: hash(nextConfig),
+      kind: 'source-config',
+      ...(userModified ? { userModified: true } : {})
+    };
+    await atomicWrite(paths.config, nextConfig, { boundary: paths.root });
+    await atomicWrite(paths.manifest, `${JSON.stringify(manifest, null, 2)}\n`, { boundary: paths.root });
+    const managed = await applyManaged(native, paths.manifest, { allowedRoots: roots.slice(0, 3) });
+    const appliedBlocks = await applyInstructionBlocks(blocks, paths.manifest, { allowedRoots: roots, allowedInstructionFiles: [paths.claudeInstructions, paths.codexInstructions] });
+    if (managed.conflicts.length || appliedBlocks.conflicts.length) throw new Error(`Model refresh conflict: ${[...managed.conflicts, ...appliedBlocks.conflicts].join('; ')}`);
+  });
+  response.changesApplied = plan.changes;
+  if (options.json) outputJson(response); else stdout.write(`Applied ${plan.changes.length} compatible Codex model update(s). Start a new native session to load regenerated agent definitions.\n`);
+  return plan.skipped.length ? EXIT.warning : EXIT.ok;
+}
+
 async function commandResolve(options) {
   if (!['claude', 'codex'].includes(options.runtime)) throw new Error('resolve requires --runtime claude or --runtime codex.');
   if (Boolean(options.role) === Boolean(options.tier)) throw new Error('resolve requires exactly one of --role or --tier.');
@@ -464,7 +733,7 @@ async function commandEdit(options) {
 }
 
 function help() {
-  stdout.write(`TierSplice v${VERSION} — model policy for coding agents\n\nUsage:\n  tiersplice init [--global|--local] [--profile economy|balanced|quality] [--no-auto-delegation] [--yes] [--dry-run]\n  tiersplice profile <name> --global|--local [--dry-run]\n  tiersplice status [--global|--local] [--json]\n  tiersplice doctor [--global|--local] [--json]\n  tiersplice sync [--global|--local] [--dry-run] [--json]\n  tiersplice config edit [--global|--local]\n  tiersplice uninstall --global|--local [--dry-run] [--json]\n  tiersplice resolve --runtime <claude|codex> (--role <role>|--tier <tier>) [--global|--local] --json\n\nNode.js >=20.11. Runtime model availability and native invocation are not probed.\n`);
+    stdout.write(`TierSplice v${VERSION} — model policy for coding agents\n\nUsage:\n  tiersplice init [--global|--local] [--profile economy|balanced|quality] [--no-auto-delegation] [--yes] [--dry-run]\n  tiersplice upgrade [--global|--local] [--dry-run] [--yes] [--json]\n  tiersplice profile <name> --global|--local [--dry-run]\n  tiersplice status [--global|--local] [--json]\n  tiersplice doctor [--global|--local] [--json]\n  tiersplice sync [--global|--local] [--dry-run] [--json]\n  tiersplice models list [--runtime claude|codex] [--global|--local] [--json]\n  tiersplice models status [--global|--local] [--json]\n  tiersplice models refresh [--global|--local] [--dry-run] [--offline] [--json]\n  tiersplice config edit [--global|--local]\n  tiersplice uninstall --global|--local [--dry-run] [--json]\n  tiersplice resolve --runtime <claude|codex> (--role <role>|--tier <tier>) [--global|--local] --json\n\nNode.js >=20.11. Model refresh uses the Codex app-server catalog when available; Claude model families use native aliases.\n`);
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -477,6 +746,8 @@ export async function main(argv = process.argv.slice(2)) {
     if (command === 'status') return await commandStatus(options);
     if (command === 'doctor') return await commandDoctor(options);
     if (command === 'sync') return await commandSync(options);
+    if (command === 'upgrade') return await commandUpgrade(options);
+    if (command === 'models') return await commandModels(args, options);
     if (command === 'uninstall') return await commandUninstall(options);
     if (command === 'resolve') return await commandResolve(options);
     if (command === 'config' && args[0] === 'edit') return await commandEdit(options);

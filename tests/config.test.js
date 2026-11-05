@@ -43,6 +43,17 @@ test('config validation rejects control characters in custom model identifiers',
   assert.ok(errors.some((error) => error.includes('custom.json.models.claude.standard.model')));
 });
 
+test('config accepts validated tracking policies and model update preferences', () => {
+  assert.deepEqual(validateConfig({
+    schemaVersion: 1,
+    profile: 'balanced',
+    models: { codex: { heavy: { model: 'gpt-6-sol', effort: 'high', tracking: 'latest-compatible', family: 'gpt-6-sol' } } },
+    modelUpdates: { enabled: true, checkIntervalHours: 24, startupRefresh: false }
+  }), []);
+  assert.ok(validateConfig({ schemaVersion: 1, profile: 'balanced', models: { codex: { heavy: { tracking: 'pinned' } } } }).some((error) => error.includes('pinned assignment requires a concrete model')));
+  assert.ok(validateConfig({ schemaVersion: 1, profile: 'balanced', modelUpdates: { checkIntervalHours: -1 } }).some((error) => error.includes('checkIntervalHours')));
+});
+
 test('all six role agents render as structured, parseable Claude and Codex definitions', () => {
   const policy = resolvePolicy({ schemaVersion: 1, profile: 'balanced', models: { claude: { standard: { model: 'custom"model' } }, codex: { standard: { model: 'custom\\model' } } } }, null);
   const claude = renderClaude(policy);
