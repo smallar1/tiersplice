@@ -29,7 +29,7 @@
 Reported local verification on the current workspace:
 
 - `npm run check` — passed.
-- `npm test` — passed, 44 tests and 0 failures.
+- `npm test` — passed, 45 tests and 0 failures.
 - `npm run smoke:pack` — passed. The script packs and installs the tarball in a disposable directory, checks the packaged CLI version/help/resolve, creates a disposable local setup, previews its upgrade, and exercises models status plus offline dry-run refresh.
 
 These local results do not establish cross-platform CI, a dependency audit, or real-host behavior. The package smoke test deliberately uses offline model refresh; fake catalog selection is covered by unit tests. Live Codex discovery, Claude/Codex invocation, account entitlement, and host reload behavior remain unverified.

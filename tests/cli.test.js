@@ -395,6 +395,35 @@ test('offline model refresh plans from validated cache and applies only compatib
   const config = JSON.parse(await readFile(configPath, 'utf8'));
   assert.equal(config.models.codex.light.model, 'gpt-6-luna-2');
   assert.equal(config.models.codex.light.tracking, 'latest-compatible');
+  const uninstall = run('uninstall', '--local');
+  assert.equal(uninstall.status, 0, uninstall.stderr || uninstall.stdout);
+  await assert.rejects(access(configPath));
+});
+
+test('model refresh keeps manually edited config marked user-owned for uninstall', async (t) => {
+  const fx = await fixture(t, true);
+  assert.equal(fx.run('init', '--local', '--yes').status, 0);
+  const configPath = path.join(fx.project, '.tiersplice.json');
+  const config = JSON.parse(await readFile(configPath, 'utf8'));
+  config.roles = { review: 'heavy' };
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  const cacheHome = path.join(fx.root, 'cache');
+  const cacheDir = path.join(cacheHome, 'tiersplice');
+  await mkdir(cacheDir, { recursive: true });
+  const catalogModel = (id, upgrade = null, family = 'gpt-6-luna') => ({ id, name: id, family, visibility: 'visible', efforts: ['low', 'medium', 'high', 'xhigh'], recommendedUpgrade: upgrade });
+  await writeFile(path.join(cacheDir, 'codex-models.json'), `${JSON.stringify({ schemaVersion: 1, runtime: 'codex', source: 'fixture', fetchedAt: new Date().toISOString(), validation: 'validated', models: [
+    catalogModel('gpt-6-luna', 'gpt-6-luna-2'), catalogModel('gpt-6-luna-2'), catalogModel('gpt-6-sol', 'gpt-6-sol-2', 'gpt-6-sol'), catalogModel('gpt-6-sol-2', null, 'gpt-6-sol')
+  ] }, null, 2)}\n`);
+  const run = (...args) => spawnSync(process.execPath, [cli, ...args, '--cwd', fx.project], { cwd: fx.project, env: { ...fx.env, XDG_CACHE_HOME: cacheHome }, encoding: 'utf8' });
+  const refresh = run('models', 'refresh', '--local', '--offline', '--json');
+  assert.equal(refresh.status, 0, refresh.stderr || refresh.stdout);
+  const manifestPath = path.join(fx.project, '.tiersplice-manifest.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  assert.equal(manifest.files[configPath].userModified, true);
+  const uninstall = run('uninstall', '--local');
+  assert.equal(uninstall.status, 1);
+  assert.match(uninstall.stdout, /Preserved modified file/);
+  assert.ok(await readFile(configPath));
 });
 
 test('local profile changes do not modify global TierSplice configuration', async (t) => {

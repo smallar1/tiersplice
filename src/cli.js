@@ -677,7 +677,19 @@ async function commandModels(args, options) {
     return EXIT.warning;
   }
   await withFileRollback([paths.config, ...native.map((item) => item.path), ...blocks.map((item) => item.path)], paths.manifest, roots, async () => {
-    await atomicWrite(paths.config, `${JSON.stringify(next, null, 2)}\n`, { boundary: paths.root });
+    const oldConfig = await readFile(paths.config);
+    const nextConfig = `${JSON.stringify(next, null, 2)}\n`;
+    const manifest = await readManifest(paths.manifest);
+    const previous = manifest.files[paths.config];
+    const userModified = previous?.userModified === true || !previous || hash(oldConfig) !== previous.currentHash;
+    manifest.files[paths.config] = {
+      ...(previous || { created: false, originalHash: hash(oldConfig) }),
+      currentHash: hash(nextConfig),
+      kind: 'source-config',
+      ...(userModified ? { userModified: true } : {})
+    };
+    await atomicWrite(paths.config, nextConfig, { boundary: paths.root });
+    await atomicWrite(paths.manifest, `${JSON.stringify(manifest, null, 2)}\n`, { boundary: paths.root });
     const managed = await applyManaged(native, paths.manifest, { allowedRoots: roots.slice(0, 3) });
     const appliedBlocks = await applyInstructionBlocks(blocks, paths.manifest, { allowedRoots: roots, allowedInstructionFiles: [paths.claudeInstructions, paths.codexInstructions] });
     if (managed.conflicts.length || appliedBlocks.conflicts.length) throw new Error(`Model refresh conflict: ${[...managed.conflicts, ...appliedBlocks.conflicts].join('; ')}`);
